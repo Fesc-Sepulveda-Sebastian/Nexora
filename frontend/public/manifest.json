@@ -1,0 +1,19 @@
+{
+  "short_name": "Nexora",
+  "name": "Nexora - Marketplace B2B/B2C para Marcas y Creadores",
+  "description": "Plataforma digital Mobile-First para conectar de forma directa, segura y trazable a Marcas con Creadores de Contenido.",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#0B0F19",
+  "theme_color": "#4f46e5",
+  "display": "standalone",
+  "orientation": "portrait",
+  "scope": "/"
+}

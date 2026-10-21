@@ -1,0 +1,92 @@
+services:
+  # 1. PostgreSQL (Transactional Source of Truth)
+  postgres:
+    image: postgres:16-alpine
+    container_name: nexora_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nexora_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexora_secret_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-nexora_db}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - nexora_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nexora_user} -d ${POSTGRES_DB:-nexora_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. MongoDB (Analytics & Immutable Social Metric Snapshots)
+  mongodb:
+    image: mongo:7.0
+    container_name: nexora_mongodb
+    restart: always
+    environment:
+      MONGO_INITDB_DATABASE: ${MONGO_INITDB_DATABASE:-nexora_analytics}
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - nexora_mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 3. MinIO (S3-Compatible Object Storage for Deliverables / Evidence)
+  minio:
+    image: cgr.dev/chainguard/minio:latest
+    container_name: nexora_minio
+    restart: always
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+    ports:
+      - "${MINIO_API_PORT:-9005}:9000"
+      - "${MINIO_CONSOLE_PORT:-9006}:9001"
+    volumes:
+      - nexora_miniodata:/data
+
+  # 4. Backend (FastAPI API + WebSocket Server)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: nexora_backend
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-nexora_user}:${POSTGRES_PASSWORD:-nexora_secret_2026}@postgres:5432/${POSTGRES_DB:-nexora_db}
+      MONGODB_URL: mongodb://mongodb:27017
+      MONGODB_DB_NAME: ${MONGO_INITDB_DATABASE:-nexora_analytics}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      MINIO_BUCKET: nexora-evidence
+      SECRET_KEY: ${SECRET_KEY:-nexora-super-secret-key-change-in-production-2026-fesc}
+    ports:
+      - "${BACKEND_PORT:-8080}:8000"
+
+  # 5. Frontend (React PWA Mobile-First)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: nexora_frontend
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+
+volumes:
+  nexora_pgdata:
+  nexora_mongodata:
+  nexora_miniodata:
