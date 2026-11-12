@@ -169,6 +169,48 @@ def test_h05_h10_full_collaboration_flow(client):
     )
     assert ev_resp.status_code == 200, ev_resp.text
     assert ev_resp.json()["data"]["file_hash_sha256"] == file_sha256
+    evidence_id = ev_resp.json()["data"]["id"]
+
+    # Third party cannot download evidence object (H02 storage protection)
+    _, _ = _register_and_login(client, "intruder_c@nexora.co", "creador", "Intruder Creator")
+    intruder_token = client.post(
+        "/api/v1/auth/login",
+        json={"email": "intruder_c@nexora.co", "password": "SecretPass123!"},
+    ).json()["data"]["access_token"]
+    assert client.get(
+        storage_info["public_url"],
+        headers={"Authorization": f"Bearer {intruder_token}"},
+    ).status_code == 403
+    assert client.get(
+        storage_info["public_url"],
+        headers={"Authorization": f"Bearer {brand_token}"},
+    ).status_code == 200
+
+    # List evidences & financial summary (10% NEXORA fee from Guía 10)
+    ev_list = client.get(
+        f"/api/v1/collaborations/{collab_id}/evidences",
+        headers={"Authorization": f"Bearer {brand_token}"},
+    )
+    assert ev_list.status_code == 200
+    assert len(ev_list.json()["data"]) == 1
+
+    rev_resp = client.patch(
+        f"/api/v1/evidences/{evidence_id}/review",
+        headers={"Authorization": f"Bearer {brand_token}"},
+        json={"status": "Aprobado", "review_notes": "Entregable conforme"},
+    )
+    assert rev_resp.status_code == 200, rev_resp.text
+    assert rev_resp.json()["data"]["status"] == "Aprobado"
+
+    fin_resp = client.get(
+        f"/api/v1/collaborations/{collab_id}/financial-summary",
+        headers={"Authorization": f"Bearer {brand_token}"},
+    )
+    assert fin_resp.status_code == 200, fin_resp.text
+    fin_data = fin_resp.json()["data"]
+    assert fin_data["nexora_commission_rate"] == 0.10
+    assert fin_data["nexora_commission_amount"] == 55000.0
+    assert fin_data["total_campaign_cost"] == 605000.0
 
     # Rating before closure must fail (RN-05)
     early_rating = client.post(

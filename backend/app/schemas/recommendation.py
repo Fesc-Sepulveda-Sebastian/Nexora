@@ -13,6 +13,8 @@ class CreatorRecommendation(BaseModel):
     location_declared: str
     avatar_url: Optional[str] = None
     average_rating: float
+    creator_tier: Optional[str] = None
+    base_tariff_usd: Optional[float] = None
     total_score: float = Field(..., description="Puntaje de afinidad calculado transparentemente (0-100)")
     matching_criteria: List[MatchCriterion] = Field(..., description="Criterios explícitos de coincidencia (RF-26)")
     rule_version: str = Field(default="recommender-v1.2", description="Versión de regla utilizada para trazabilidad RNF-15")

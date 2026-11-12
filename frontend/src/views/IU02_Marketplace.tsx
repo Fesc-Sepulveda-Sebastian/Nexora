@@ -2,11 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { CreatorRecommendation, Campaign } from '../types';
 import { api } from '../services/api';
 import { indexDB } from '../db/indexdb';
+import { useAuth } from '../context/AuthContext';
 import { useOfflineSync } from '../context/OfflineSyncContext';
 import { CreatorCard } from '../components/marketplace/CreatorCard';
 import { CampaignCard } from '../components/marketplace/CampaignCard';
 import { BottomSheetFilters } from '../components/marketplace/BottomSheetFilters';
-import { Search, SlidersHorizontal, Sparkles, Users, Megaphone, ToggleLeft, ToggleRight } from 'lucide-react';
+import { Search, SlidersHorizontal, Sparkles, Users, Megaphone, ToggleLeft, ToggleRight, AlertCircle } from 'lucide-react';
 
 interface IU02MarketplaceProps {
   onSelectCreator: (creatorId: string) => void;
@@ -17,11 +18,13 @@ export const IU02_Marketplace: React.FC<IU02MarketplaceProps> = ({
   onSelectCreator,
   onSelectCampaign
 }) => {
+  const { isAuthenticated } = useAuth();
   const { isOnline } = useOfflineSync();
   const [activeTab, setActiveTab] = useState<'creators' | 'campaigns'>('creators');
   const [searchTerm, setSearchTerm] = useState('');
   const [personalizationActive, setPersonalizationActive] = useState(true);
   const [isBottomSheetOpen, setIsBottomSheetOpen] = useState(false);
+  const [noticeMsg, setNoticeMsg] = useState<string | null>(null);
 
   // Filters State
   const [filters, setFilters] = useState({
@@ -38,31 +41,25 @@ export const IU02_Marketplace: React.FC<IU02MarketplaceProps> = ({
 
   useEffect(() => {
     loadData();
-  }, [activeTab, personalizationActive, filters.niche, isOnline]);
+  }, [activeTab, personalizationActive, filters.niche, isOnline, isAuthenticated]);
 
   const loadData = async () => {
     setLoading(true);
+    setNoticeMsg(null);
     try {
       if (activeTab === 'creators') {
         if (!isOnline) {
-          // Offline fallback
-          setCreators([
-            {
-              creator_id: 'sofia_cucuta',
-              display_name: 'Sofía Castro | Foodie Cúcuta (Caché)',
-              niche: 'Gastronomía',
-              location_declared: 'Cúcuta, Colombia',
-              average_rating: 5.0,
-              total_score: 92.0,
-              matching_criteria: [{ criterion: 'nicho', detail: 'Coincide por: Nicho Gastronomía', weight_score: 35 }],
-              rule_version: 'recommender-v1.2'
-            }
-          ]);
-          setLoading(false);
+          setCreators([]);
+          setNoticeMsg('Sin conexión a internet: el catálogo de recomendaciones de creadores requiere conexión en línea.');
+          return;
+        }
+        if (!isAuthenticated) {
+          setCreators([]);
+          setNoticeMsg('Inicia sesión para consultar recomendaciones personalizadas y campañas activas (H02).');
           return;
         }
 
-        // Fetch campaigns to recommend creators for first campaign
+        // Fetch campaigns to recommend creators for first active campaign
         const campRes = await api.request<any>('/campaigns?limit=1');
         const firstCampId = campRes.data.items?.[0]?.id;
 
@@ -71,13 +68,20 @@ export const IU02_Marketplace: React.FC<IU02MarketplaceProps> = ({
             `/recommendations/campaigns/${firstCampId}/creators?personalization=${personalizationActive}`
           );
           setCreators(data.items || []);
+        } else {
+          setCreators([]);
+          setNoticeMsg('Aún no hay campañas publicadas para calcular afinidad de creadores.');
         }
       } else {
         // Fetch campaigns
         if (!isOnline) {
           const cached = await indexDB.getRecentCampaigns();
           setCampaigns(cached as any);
-          setLoading(false);
+          return;
+        }
+        if (!isAuthenticated) {
+          setCampaigns([]);
+          setNoticeMsg('Inicia sesión para explorar campañas publicadas (H02).');
           return;
         }
 
@@ -103,8 +107,9 @@ export const IU02_Marketplace: React.FC<IU02MarketplaceProps> = ({
           });
         });
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('Error fetching marketplace data:', e);
+      setNoticeMsg(e?.message || 'No fue posible consultar el marketplace en este momento.');
     } finally {
       setLoading(false);
     }
@@ -281,6 +286,12 @@ export const IU02_Marketplace: React.FC<IU02MarketplaceProps> = ({
 
         {/* Content Column: 3 cols on Desktop, 2 on Tablet, 1 on Mobile */}
         <main className="lg:col-span-3">
+          {noticeMsg && (
+            <div className="mb-4 p-3.5 rounded-2xl bg-amber-950/60 border border-amber-800/70 text-amber-200 text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{noticeMsg}</span>
+            </div>
+          )}
           {loading ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
               {[1, 2, 3, 4, 5, 6].map((i) => (

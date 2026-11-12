@@ -18,6 +18,7 @@ from app.schemas.application import (
 )
 from app.schemas.common import APIResponse
 from app.core.audit_middleware import record_audit_log
+from app.domain.nexora_rules import validar_postulacion
 from app.services.storage_service import storage_service
 from app.api.deps import get_current_user, require_role, get_correlation_id
 
@@ -69,14 +70,17 @@ def apply_to_campaign(
                     detail="No se pudo reconstruir la respuesta idempotente previa."
                 ) from exc
 
-    # 2. Check campaign existence and published state
+    # 2. Check campaign existence and published state (Guía 02–03 validation)
     campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaña no encontrada")
-    if campaign.status != CampaignStatus.PUBLICADA.value:
+    if not validar_postulacion(
+        campana_abierta=(campaign.status == CampaignStatus.PUBLICADA.value),
+        cumple_requisitos=not (current_user.profile and current_user.profile.has_infractions),
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Solo es posible postularse a campañas en estado 'Publicada'."
+            detail="Solo es posible postularse a campañas 'Publicada' sin infracciones activas."
         )
 
     # 3. Check for existing application by this creator
@@ -234,9 +238,9 @@ def update_application_status(
     app.status = new_state
     app.updated_at = datetime.utcnow()
 
-    # If accepted, automatically initiate Collaboration Agreement and initial v1 history snapshot
+    # If accepted, automatically initiate Collaboration Agreement and initial v1 history snapshot (15-day standard deadline)
     if new_state == ApplicationStatus.ACEPTADA and not app.agreement:
-        deadline_dt = campaign.end_date or (datetime.utcnow() + timedelta(days=14))
+        deadline_dt = campaign.end_date or (datetime.utcnow() + timedelta(days=15))
         scope_desc = f"Colaboración para campaña: {campaign.title}"
         deliv_terms = campaign.deliverables or "[]"
         comp_amount = campaign.budget or 0.0

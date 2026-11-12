@@ -50,6 +50,11 @@ class ProfileUpdate(BaseModel):
     languages: Optional[str] = None
     avatar_url: Optional[str] = None
     portfolio_samples: Optional[str] = None
+    has_infractions: Optional[bool] = None
+    is_available: Optional[bool] = None
+    is_verified: Optional[bool] = None
+    has_debts: Optional[bool] = None
+    followers_declared: Optional[int] = Field(default=None, ge=0)
 
 class ProfileOut(ProfileBase):
     id: str
@@ -57,6 +62,11 @@ class ProfileOut(ProfileBase):
     verified_reviews_count: int
     average_rating: float
     current_media_kit_version: int
+    has_infractions: bool = False
+    is_available: bool = True
+    is_verified: bool = True
+    has_debts: bool = False
+    followers_declared: int = 0
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -85,6 +95,9 @@ class MediaKitOut(BaseModel):
     verified_reviews_count: int
     average_rating: float
     portfolio_samples: List[Dict[str, Any]] = []
+    creator_tier: str = "Nano"
+    nexora_premium_eligible: bool = False
+    metrics_restricted: bool = False
     # Metrics snapshots differentiating connected API vs declared (RN-03)
     connected_metrics: List[MetricSnapshot] = []
     declared_metrics: List[Dict[str, Any]] = []

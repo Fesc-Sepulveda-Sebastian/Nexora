@@ -92,7 +92,12 @@ def seed():
             portfolio_samples=json.dumps(samples_c1),
             average_rating=5.0,
             verified_reviews_count=12,
-            current_media_kit_version=3
+            current_media_kit_version=3,
+            has_infractions=False,
+            is_available=True,
+            is_verified=True,
+            has_debts=False,
+            followers_declared=8650
         )
         db.add(creator1_profile)
 
@@ -138,7 +143,12 @@ def seed():
             avatar_url="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80",
             average_rating=4.8,
             verified_reviews_count=9,
-            current_media_kit_version=1
+            current_media_kit_version=1,
+            has_infractions=False,
+            is_available=True,
+            is_verified=True,
+            has_debts=False,
+            followers_declared=4200
         )
         db.add(creator2_profile)
 

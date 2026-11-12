@@ -187,27 +187,48 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({
 
     setIsSubmitting(true);
     try {
-      // 1. Create draft first
-      const { data: createdDraft } = await api.request<Campaign>('/campaigns', {
-        method: 'POST',
-        body: {
-          title,
-          objective,
-          niche,
-          compensation_type: compensationType,
-          budget: Number(budget),
-          compensation_notes: compensationNotes,
-          start_date: new Date(startDate).toISOString(),
-          end_date: new Date(endDate).toISOString(),
-          deliverables,
-          selection_criteria: selectionCriteria
-        }
-      });
+      const payload = {
+        title,
+        objective,
+        niche,
+        compensation_type: compensationType,
+        budget: Number(budget),
+        compensation_notes: compensationNotes,
+        start_date: new Date(startDate).toISOString(),
+        end_date: new Date(endDate).toISOString(),
+        deliverables,
+        selection_criteria: selectionCriteria
+      };
+
+      // 1. Update existing server draft or create a new draft (prevents duplicate campaigns)
+      let targetCampaignId = serverCampaignId;
+      if (targetCampaignId) {
+        const { data: updatedDraft } = await api.request<Campaign>(`/campaigns/${targetCampaignId}`, {
+          method: 'PUT',
+          body: { ...payload, version_id: versionId }
+        });
+        targetCampaignId = updatedDraft.id;
+        setVersionId(updatedDraft.version_id);
+      } else {
+        const { data: createdDraft } = await api.request<Campaign>('/campaigns', {
+          method: 'POST',
+          body: payload
+        });
+        targetCampaignId = createdDraft.id;
+        setServerCampaignId(createdDraft.id);
+        setVersionId(createdDraft.version_id);
+      }
 
       // 2. Publish draft validating RN-01 on backend
-      const { data: publishedCampaign } = await api.request<Campaign>(`/campaigns/${createdDraft.id}/publish`, {
+      const { data: publishedCampaign } = await api.request<Campaign>(`/campaigns/${targetCampaignId}/publish`, {
         method: 'POST'
       });
+
+      if (localDraftId) {
+        await indexDB.deleteLocalDraft(localDraftId);
+        await indexDB.removeOutboxAction(`outbox_${localDraftId}`);
+        onDraftSaved?.();
+      }
 
       onCampaignCreated(publishedCampaign);
     } catch (e: any) {

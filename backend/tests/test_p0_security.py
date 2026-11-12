@@ -322,11 +322,30 @@ def test_h09_oauth_demo_snapshots_not_labeled_official(client):
     assert good_cb.status_code == 200, good_cb.text
     assert "DEMO" in good_cb.json()["message"]
 
-    mk = client.get(f"/api/v1/users/{c_id}/media-kit")
+    # Creator views own Media Kit -> sees DEMO snapshots (Guía 03: es_creador OR es_administrador)
+    mk = client.get(
+        f"/api/v1/users/{c_id}/media-kit",
+        headers={"Authorization": f"Bearer {c_token}"},
+    )
     assert mk.status_code == 200
-    snapshots = mk.json()["data"]["connected_metrics"]
+    mk_data = mk.json()["data"]
+    assert mk_data["metrics_restricted"] is False
+    snapshots = mk_data["connected_metrics"]
     assert len(snapshots) == 1
     assert snapshots[0]["estado"] == "DEMO"
     assert "API_OFICIAL" not in snapshots[0]["fuente_origen"]
     assert "DEMO" in snapshots[0]["fuente_origen"]
+
+    # Brand or anonymous caller views creator Media Kit -> basic profile visible, detailed metrics restricted
+    _, _ = _register_and_login(client, "viewer_brand@nexora.co", "marca", "Viewer Brand")
+    brand_login = client.post("/api/v1/auth/login", json={"email": "viewer_brand@nexora.co", "password": "SecretPass123!"})
+    b_token = brand_login.json()["data"]["access_token"]
+    mk_brand = client.get(
+        f"/api/v1/users/{c_id}/media-kit",
+        headers={"Authorization": f"Bearer {b_token}"},
+    )
+    assert mk_brand.status_code == 200
+    assert mk_brand.json()["data"]["metrics_restricted"] is True
+    assert mk_brand.json()["data"]["connected_metrics"] == []
+    assert mk_brand.json()["data"]["declared_metrics"] == []
 

@@ -116,7 +116,7 @@ export const EvidenceUploader: React.FC<EvidenceUploaderProps> = ({
       </div>
 
       <p className="text-xs text-slate-400 mb-4">
-        Sube capturas o archivos de soporte (0.2 MB a 10 MB) con verificación criptográfica SHA-256 y URL presignada.
+        Sube capturas, videos o comprobantes PDF (&le; 10 MB) con verificación criptográfica SHA-256 y URL presignada.
       </p>
 
       {errorMsg && (
@@ -161,11 +161,11 @@ export const EvidenceUploader: React.FC<EvidenceUploaderProps> = ({
 
         <div>
           <label className="text-[11px] font-semibold text-slate-300 uppercase block mb-1">
-            Archivo de Evidencia (Imagen o Video corto &lt; 10 MB)
+            Archivo de Evidencia (Imagen, Video o PDF &lt; 10 MB)
           </label>
           <input
             type="file"
-            accept="image/*,video/mp4"
+            accept="image/*,video/mp4,video/quicktime,.pdf"
             onChange={handleFileChange}
             className="w-full text-xs text-slate-400 file:mr-4 file:py-2.5 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-brand-600 file:text-white hover:file:bg-brand-500 cursor-pointer min-h-touch"
           />

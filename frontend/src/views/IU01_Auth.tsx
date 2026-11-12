@@ -52,17 +52,14 @@ export const IU01_Auth: React.FC<IU01AuthProps> = ({ onSuccess }) => {
     }
   };
 
-  const setDemoCredentials = (demoRole: 'brand' | 'creator' | 'admin') => {
+  const setDemoCredentials = (demoRole: 'brand' | 'creator') => {
     setIsRegister(false);
     if (demoRole === 'brand') {
       setEmail('marca@cucutagourmet.com');
       setPassword('BrandPass123!');
-    } else if (demoRole === 'creator') {
+    } else {
       setEmail('sofia@cucutafoodie.com');
       setPassword('CreatorPass123!');
-    } else {
-      setEmail('admin@nexora.co');
-      setPassword('AdminPass123!');
     }
   };
 
@@ -104,13 +101,6 @@ export const IU01_Auth: React.FC<IU01AuthProps> = ({ onSuccess }) => {
               className="flex-1 py-1.5 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[11px] font-medium"
             >
               Creador Demo
-            </button>
-            <button
-              type="button"
-              onClick={() => setDemoCredentials('admin')}
-              className="flex-1 py-1.5 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[11px] font-medium"
-            >
-              Admin
             </button>
           </div>
         </div>

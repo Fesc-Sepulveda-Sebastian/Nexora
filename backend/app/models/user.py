@@ -45,6 +45,11 @@ class Profile(Base):
     verified_reviews_count = Column(Integer, default=0)
     average_rating = Column(Float, default=0.0)
     current_media_kit_version = Column(Integer, default=1)
+    has_infractions = Column(Boolean, default=False)
+    is_available = Column(Boolean, default=True)
+    is_verified = Column(Boolean, default=True)
+    has_debts = Column(Boolean, default=False)
+    followers_declared = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

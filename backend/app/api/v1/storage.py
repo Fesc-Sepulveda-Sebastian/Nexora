@@ -1,8 +1,11 @@
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from sqlalchemy.orm import Session
+from app.database import get_db
 from app.services.storage_service import storage_service
 from app.api.deps import get_current_user
-from app.models.user import User
+from app.models.application import DeliverableEvidence
+from app.models.user import User, UserRole
 
 router = APIRouter(prefix="/storage", tags=["Almacenamiento de Archivos S3/MinIO"])
 
@@ -85,7 +88,27 @@ async def upload_local_signed_object(
 def download_local_object(
     file_key: str,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
+    evidence = (
+        db.query(DeliverableEvidence)
+        .filter(DeliverableEvidence.file_url.contains(file_key))
+        .first()
+    )
+    if evidence and evidence.application:
+        app_row = evidence.application
+        campaign = app_row.campaign
+        is_allowed = (
+            current_user.id == app_row.creator_id
+            or (campaign and current_user.id == campaign.brand_id)
+            or current_user.role == UserRole.ADMINISTRADOR.value
+        )
+        if not is_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No autorizado para acceder a esta evidencia.",
+            )
+
     try:
         data, content_type = storage_service.get_local_object(file_key)
     except (FileNotFoundError, ValueError) as exc:

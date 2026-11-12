@@ -3,8 +3,9 @@ from typing import List, Dict, Any, Optional, Set
 from app.schemas.recommendation import CreatorRecommendation, MatchCriterion, RecommendationResult
 from app.models.campaign import Campaign
 from app.models.user import User, Profile
+from app.domain.nexora_rules import clasificar_creador_y_tarifa
 
-RULE_VERSION = "recommender-v1.3"
+RULE_VERSION = "recommender-v1.4"
 
 
 def _safe_json_loads(raw: Optional[str], default: Any) -> Any:
@@ -59,7 +60,12 @@ class RecommenderService:
                 p = u.profile
                 if not p:
                     continue
+                if p.has_infractions:
+                    continue
+                if not p.is_available:
+                    continue
                 real_rating = round(float(p.average_rating), 2) if p.average_rating is not None else 0.0
+                tier_info = clasificar_creador_y_tarifa(max(int(p.followers_declared or 0), 0))
                 items.append(
                     CreatorRecommendation(
                         creator_id=u.id,
@@ -68,6 +74,8 @@ class RecommenderService:
                         location_declared=p.location_declared or "No especificada",
                         avatar_url=p.avatar_url,
                         average_rating=real_rating,
+                        creator_tier=tier_info["nivel"],
+                        base_tariff_usd=tier_info["tarifa_usd"],
                         total_score=50.0,
                         matching_criteria=[
                             MatchCriterion(
@@ -89,6 +97,7 @@ class RecommenderService:
             if str(p).strip()
         }
         target_formats = _extract_campaign_formats(campaign)
+        min_followers = int(criteria_dict.get("min_followers") or 0)
 
         recommendations: List[CreatorRecommendation] = []
 
@@ -97,6 +106,16 @@ class RecommenderService:
             if not profile:
                 continue
 
+            # Guía 06 security & availability filter with `continue`
+            if profile.has_infractions:
+                continue
+            if not profile.is_available:
+                continue
+            followers_declared = int(profile.followers_declared or 0)
+            if min_followers > 0 and followers_declared > 0 and followers_declared < min_followers:
+                continue
+
+            tier_info = clasificar_creador_y_tarifa(max(followers_declared, 0))
             score = 0.0
             criteria: List[MatchCriterion] = []
 
@@ -188,6 +207,8 @@ class RecommenderService:
                     location_declared=profile.location_declared or "No especificada",
                     avatar_url=profile.avatar_url,
                     average_rating=real_rating,
+                    creator_tier=tier_info["nivel"],
+                    base_tariff_usd=tier_info["tarifa_usd"],
                     total_score=round(min(score, 100.0), 1),
                     matching_criteria=criteria,
                     rule_version=RULE_VERSION

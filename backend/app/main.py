@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -101,7 +102,7 @@ async def websocket_user_endpoint(
         while True:
             data = await websocket.receive_text()
             # Echo or process incoming ping
-            await websocket.send_text(f'{{"event":"ack","received":"{data}"}}')
+            await websocket.send_text(json.dumps({"event": "ack", "received": data}))
     except WebSocketDisconnect:
         ws_manager.disconnect_user(websocket, user_id)
 

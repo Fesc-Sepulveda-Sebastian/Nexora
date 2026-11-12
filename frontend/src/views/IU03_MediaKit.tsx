@@ -5,7 +5,7 @@ import { indexDB } from '../db/indexdb';
 import { useAuth } from '../context/AuthContext';
 import { useOfflineSync } from '../context/OfflineSyncContext';
 import { KPICard } from '../components/mediakit/KPICard';
-import { Star, MapPin, Globe, ShieldCheck, Award, ExternalLink, MessageCircle, AlertCircle } from 'lucide-react';
+import { Star, MapPin, Globe, ShieldCheck, Award, ExternalLink, MessageCircle, AlertCircle, Lock, Trash2 } from 'lucide-react';
 
 interface IU03MediaKitProps {
   creatorId?: string;
@@ -16,11 +16,13 @@ export const IU03_MediaKit: React.FC<IU03MediaKitProps> = ({
   creatorId,
   onContactOrInvite
 }) => {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const { isOnline } = useOfflineSync();
   const [mediaKit, setMediaKit] = useState<MediaKitData | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState(false);
 
   useEffect(() => {
     loadMediaKit();
@@ -76,6 +78,21 @@ export const IU03_MediaKit: React.FC<IU03MediaKitProps> = ({
     }
   };
 
+  const handleDeletePrivacyAccount = async () => {
+    setDeletingAccount(true);
+    setErrorMsg(null);
+    try {
+      await api.request('/users/me/privacy/delete-request', {
+        method: 'POST',
+        body: { notes: 'Solicitud de eliminación / anonimización de datos personales (Habeas Data RNF-12).' }
+      });
+      await logout();
+    } catch (e: any) {
+      setErrorMsg(e?.message || 'No se pudo procesar la solicitud de eliminación.');
+      setDeletingAccount(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8 animate-pulse">
@@ -98,7 +115,9 @@ export const IU03_MediaKit: React.FC<IU03MediaKitProps> = ({
     );
   }
 
+  const isOwnMediaKit = Boolean(user?.id && mediaKit.creator_id === user.id);
   const primaryMetric = mediaKit.connected_metrics[0];
+  const declaredFollowers = mediaKit.declared_metrics?.[0]?.seguidores_estimados;
   const isOfficialApi = Boolean(
     primaryMetric &&
     primaryMetric.estado === 'CONECTADO_API' &&
@@ -126,6 +145,16 @@ export const IU03_MediaKit: React.FC<IU03MediaKitProps> = ({
               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-brand-500/20 text-brand-300 border border-brand-500/30">
                 Media Kit v{mediaKit.version}
               </span>
+              {mediaKit.creator_tier && (
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-200 border border-slate-700">
+                  Nivel {mediaKit.creator_tier}
+                </span>
+              )}
+              {mediaKit.nexora_premium_eligible && (
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  NEXORA Premium
+                </span>
+              )}
             </div>
 
             <p className="text-xs sm:text-sm text-slate-300 max-w-2xl mt-1">
@@ -164,6 +193,17 @@ export const IU03_MediaKit: React.FC<IU03MediaKitProps> = ({
           </span>
         </h2>
 
+        {mediaKit.metrics_restricted ? (
+          <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 text-xs text-slate-300 flex items-start gap-3">
+            <Lock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold text-white mb-1">Métricas detalladas protegidas por control de acceso</p>
+              <p className="text-slate-400">
+                Por política de privacidad de Nexora (Guía 03), los snapshots de audiencia y métricas detalladas solo son visibles para el creador propietario y administradores autorizados.
+              </p>
+            </div>
+          </div>
+        ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {primaryMetric ? (
             <>
@@ -205,16 +245,21 @@ export const IU03_MediaKit: React.FC<IU03MediaKitProps> = ({
                 period={primaryMetric.periodo}
               />
             </>
-          ) : (
+          ) : declaredFollowers ? (
             <KPICard
               label="Audiencia Declarada"
-              value="5,400"
+              value={Number(declaredFollowers).toLocaleString()}
               subtitle="Estimación del creador"
               sourceType="DECLARADO"
               period="Declaración manual"
             />
+          ) : (
+            <div className="sm:col-span-2 lg:col-span-4 p-4 rounded-2xl bg-slate-900 border border-slate-800 text-xs text-slate-400">
+              Aún no hay snapshots conectados ni seguidores declarados registrados en este Media Kit.
+            </div>
           )}
         </div>
+        )}
 
         {/* Authenticity Legal & Technical Notice (RN-03) */}
         <div className="mt-3 p-3 rounded-2xl bg-slate-900/60 border border-slate-800 text-[11px] text-slate-400 flex items-center gap-2">
@@ -259,6 +304,50 @@ export const IU03_MediaKit: React.FC<IU03MediaKitProps> = ({
           ))}
         </div>
       </div>
+
+      {isOwnMediaKit && (
+        <div className="bg-slate-900 border border-rose-900/50 rounded-3xl p-6 shadow-xl mb-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-bold text-rose-300 flex items-center gap-2">
+                <Trash2 className="w-4 h-4" />
+                <span>Privacidad y Habeas Data (RNF-12)</span>
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                Puedes solicitar la eliminación y anonimización irreversible de tu cuenta, perfil y consentimientos OAuth activos.
+              </p>
+            </div>
+            {!showDeleteConfirm ? (
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirm(true)}
+                className="px-4 py-2.5 bg-rose-950 hover:bg-rose-900 text-rose-200 border border-rose-800 rounded-xl text-xs font-bold min-h-touch shrink-0"
+              >
+                Solicitar Baja / Anonimización
+              </button>
+            ) : (
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteConfirm(false)}
+                  disabled={deletingAccount}
+                  className="px-3 py-2 bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold min-h-touch"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeletePrivacyAccount}
+                  disabled={deletingAccount}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold min-h-touch"
+                >
+                  {deletingAccount ? 'Procesando...' : 'Confirmar Anonimización'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Floating Bottom Action CTA for Mobile (< 768px) and Inline on Desktop */}
       <div className="fixed lg:static bottom-14 left-0 right-0 p-4 bg-slate-950/95 lg:bg-transparent backdrop-blur-lg lg:backdrop-blur-none border-t border-slate-800 lg:border-t-0 z-30">

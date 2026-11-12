@@ -139,3 +139,19 @@ def test_h14_recommender_no_cucuta_bias_and_zero_initial_rating(client):
     for item in rec_off.json()["data"]["items"]:
         if item["creator_id"] in (c1_id, c2_id):
             assert item["average_rating"] == 0.0
+
+    # Guía 06: Creator with active infractions must be excluded from recommendations (`continue`)
+    inf_resp = client.put(
+        "/api/v1/users/me/profile",
+        headers={"Authorization": f"Bearer {c1_token}"},
+        json={"has_infractions": True},
+    )
+    assert inf_resp.status_code == 200
+    rec_after_inf = client.get(
+        f"/api/v1/recommendations/campaigns/{camp_id}/creators?personalization=true",
+        headers={"Authorization": f"Bearer {brand_token}"},
+    )
+    assert rec_after_inf.status_code == 200
+    ids_after_inf = [i["creator_id"] for i in rec_after_inf.json()["data"]["items"]]
+    assert c1_id not in ids_after_inf
+    assert c2_id in ids_after_inf

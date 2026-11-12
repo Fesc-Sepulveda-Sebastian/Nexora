@@ -23,6 +23,11 @@ export interface Profile {
   verified_reviews_count: number;
   average_rating: number;
   current_media_kit_version: number;
+  has_infractions?: boolean;
+  is_available?: boolean;
+  is_verified?: boolean;
+  has_debts?: boolean;
+  followers_declared?: number;
 }
 
 export interface DeliverableItem {
@@ -139,9 +144,38 @@ export interface MediaKitData {
   verified_reviews_count: number;
   average_rating: number;
   portfolio_samples: any[];
+  creator_tier?: string;
+  nexora_premium_eligible?: boolean;
+  metrics_restricted?: boolean;
   connected_metrics: MetricSnapshot[];
   declared_metrics: any[];
   generated_at_utc: string;
+}
+
+export interface CollaborationAgreementVersion {
+  id: string;
+  collaboration_id: string;
+  version_id: number;
+  scope_description: string;
+  deliverables_terms: string;
+  compensation_amount: number;
+  deadline: string;
+  edited_by_id?: string;
+  created_at: string;
+}
+
+export interface CollaborationFinancialSummary {
+  collaboration_id: string;
+  compensation_amount: number;
+  nexora_commission_rate: number;
+  nexora_commission_amount: number;
+  total_campaign_cost: number;
+  total_pieces: number;
+  volume_discount_applied: boolean;
+  volume_discount_pct: number;
+  volume_discounted_total: number;
+  viable: boolean;
+  budget_difference: number;
 }
 
 export interface MatchCriterion {
@@ -157,6 +191,8 @@ export interface CreatorRecommendation {
   location_declared: string;
   avatar_url?: string;
   average_rating: number;
+  creator_tier?: string;
+  base_tariff_usd?: number;
   total_score: number;
   matching_criteria: MatchCriterion[];
   rule_version: string;

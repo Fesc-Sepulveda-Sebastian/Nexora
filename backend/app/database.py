@@ -1,5 +1,5 @@
 import logging
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from app.config import settings
 
@@ -48,4 +48,21 @@ def init_db():
     # Import all models to register with Base
     import app.models # noqa
     Base.metadata.create_all(bind=engine)
+    if settings.DATABASE_URL.startswith("sqlite"):
+        _ensure_sqlite_profile_columns()
     logger.info("SQL database tables initialized successfully.")
+
+
+def _ensure_sqlite_profile_columns():
+    new_columns = {
+        "has_infractions": "BOOLEAN DEFAULT 0",
+        "is_available": "BOOLEAN DEFAULT 1",
+        "is_verified": "BOOLEAN DEFAULT 1",
+        "has_debts": "BOOLEAN DEFAULT 0",
+        "followers_declared": "INTEGER DEFAULT 0",
+    }
+    with engine.begin() as conn:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(profiles)")).fetchall()}
+        for col_name, col_def in new_columns.items():
+            if col_name not in cols:
+                conn.execute(text(f"ALTER TABLE profiles ADD COLUMN {col_name} {col_def}"))

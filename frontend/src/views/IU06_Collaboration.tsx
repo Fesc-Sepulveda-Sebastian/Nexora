@@ -1,5 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Application, Campaign, CollaborationAgreement } from '../types';
+import {
+  Application,
+  Campaign,
+  CollaborationAgreement,
+  CollaborationAgreementVersion,
+  CollaborationFinancialSummary,
+  DeliverableEvidence
+} from '../types';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { MilestoneBar } from '../components/collaboration/MilestoneBar';
@@ -8,7 +15,8 @@ import { EvidenceUploader } from '../components/collaboration/EvidenceUploader';
 import { ROICalculatorCard } from '../components/collaboration/ROICalculatorCard';
 import {
   Users, CheckCircle2, XCircle, Sparkles, MessageSquare,
-  Star, DollarSign, Calendar, AlertCircle, Edit3, Briefcase
+  Star, DollarSign, Calendar, AlertCircle, Edit3, Briefcase,
+  History, FileCheck, ExternalLink
 } from 'lucide-react';
 
 interface IU06CollaborationProps {
@@ -25,6 +33,11 @@ export const IU06_Collaboration: React.FC<IU06CollaborationProps> = ({ campaignI
   const [applicants, setApplicants] = useState<Application[]>([]);
   const [collaborations, setCollaborations] = useState<CollaborationAgreement[]>([]);
   const [collaboration, setCollaboration] = useState<CollaborationAgreement | null>(null);
+  const [versions, setVersions] = useState<CollaborationAgreementVersion[]>([]);
+  const [showVersions, setShowVersions] = useState(false);
+  const [evidences, setEvidences] = useState<DeliverableEvidence[]>([]);
+  const [financialSummary, setFinancialSummary] = useState<CollaborationFinancialSummary | null>(null);
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedApplicantMediaKit, setSelectedApplicantMediaKit] = useState<any | null>(null);
 
@@ -53,6 +66,23 @@ export const IU06_Collaboration: React.FC<IU06CollaborationProps> = ({ campaignI
     }
   }, [isAuthenticated, selectedCampaignId, user?.id]);
 
+  const loadCollaborationDetails = async (collabId: string) => {
+    try {
+      const [verRes, evRes, finRes] = await Promise.all([
+        api.request<CollaborationAgreementVersion[]>(`/collaborations/${collabId}/versions`).catch(() => ({ data: [] })),
+        api.request<DeliverableEvidence[]>(`/collaborations/${collabId}/evidences`).catch(() => ({ data: [] })),
+        api.request<CollaborationFinancialSummary>(`/collaborations/${collabId}/financial-summary`).catch(() => ({ data: null }))
+      ]);
+      setVersions(verRes.data || []);
+      setEvidences(evRes.data || []);
+      setFinancialSummary(finRes.data || null);
+    } catch (_) {
+      setVersions([]);
+      setEvidences([]);
+      setFinancialSummary(null);
+    }
+  };
+
   const loadCollaborationData = async () => {
     setLoading(true);
     setErrorMsg(null);
@@ -68,6 +98,11 @@ export const IU06_Collaboration: React.FC<IU06CollaborationProps> = ({ campaignI
       if (activeCollab) {
         setEditScope(activeCollab.scope_description);
         setEditAmount(activeCollab.compensation_amount);
+        await loadCollaborationDetails(activeCollab.id);
+      } else {
+        setVersions([]);
+        setEvidences([]);
+        setFinancialSummary(null);
       }
 
       // If brand or admin, load own campaigns and applicants for selected campaign
@@ -135,6 +170,7 @@ export const IU06_Collaboration: React.FC<IU06CollaborationProps> = ({ campaignI
       setCollaboration(data);
       setEditingTerms(false);
       setActionMsg(`Términos actualizados a versión ${data.version_id}. Ambas partes deben aceptar nuevamente.`);
+      await loadCollaborationDetails(data.id);
     } catch (e: any) {
       setErrorMsg(e.message || 'Error al actualizar términos del acuerdo');
     }
@@ -178,6 +214,31 @@ export const IU06_Collaboration: React.FC<IU06CollaborationProps> = ({ campaignI
     }
   };
 
+  const handleReviewEvidence = async (evidenceId: string, reviewStatus: 'Aprobado' | 'Rechazado') => {
+    if (!collaboration) return;
+    setReviewingId(evidenceId);
+    setErrorMsg(null);
+    setActionMsg(null);
+    try {
+      await api.request<DeliverableEvidence>(`/evidences/${evidenceId}/review`, {
+        method: 'PATCH',
+        body: {
+          status: reviewStatus,
+          review_notes:
+            reviewStatus === 'Aprobado'
+              ? 'Entregable verificado y aprobado por la marca.'
+              : 'Requiere ajustes según el alcance acordado.'
+        }
+      });
+      setActionMsg(`Evidencia marcada como '${reviewStatus}'.`);
+      await loadCollaborationDetails(collaboration.id);
+    } catch (e: any) {
+      setErrorMsg(e.message || 'Error al revisar evidencia');
+    } finally {
+      setReviewingId(null);
+    }
+  };
+
   const handleSubmitRating = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
@@ -195,6 +256,29 @@ export const IU06_Collaboration: React.FC<IU06CollaborationProps> = ({ campaignI
       setTimeout(() => setShowRatingModal(false), 1500);
     } catch (e: any) {
       setErrorMsg(e.message || 'RN-05: Error al registrar calificación bilateral');
+    }
+  };
+
+  const handleOpenEvidenceFile = async (fileUrl: string) => {
+    try {
+      const targetUrl = fileUrl.startsWith('http') ? fileUrl : `${api.getApiOrigin()}${fileUrl}`;
+      if (fileUrl.startsWith('http')) {
+        window.open(targetUrl, '_blank', 'noopener,noreferrer');
+        return;
+      }
+      const token = localStorage.getItem('nexora_token');
+      const res = await fetch(targetUrl, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
+      if (!res.ok) {
+        throw new Error(`No autorizado o archivo no disponible (${res.status})`);
+      }
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      window.open(blobUrl, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    } catch (e: any) {
+      setErrorMsg(e?.message || 'No fue posible abrir el archivo de evidencia.');
     }
   };
 
@@ -270,6 +354,7 @@ export const IU06_Collaboration: React.FC<IU06CollaborationProps> = ({ campaignI
                 if (found) {
                   setEditScope(found.scope_description);
                   setEditAmount(found.compensation_amount);
+                  loadCollaborationDetails(found.id);
                 }
               }}
               className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white min-h-touch"
@@ -509,27 +594,78 @@ export const IU06_Collaboration: React.FC<IU06CollaborationProps> = ({ campaignI
                     Marca: {collaboration.brand_accepted ? '✓ Aceptado' : 'Pendiente'} | Creador: {collaboration.creator_accepted ? '✓ Aceptado' : 'Pendiente'}
                   </span>
                 </div>
+                {financialSummary && (
+                  <div className="mt-3 inline-flex flex-wrap items-center gap-3 px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-[11px] text-slate-300">
+                    <span>Comisión NEXORA (10%): <strong className="text-brand-300">${financialSummary.nexora_commission_amount.toLocaleString()}</strong></span>
+                    <span>•</span>
+                    <span>Costo total campaña: <strong className="text-emerald-400">${financialSummary.total_campaign_cost.toLocaleString()}</strong></span>
+                    {financialSummary.volume_discount_applied && (
+                      <>
+                        <span>•</span>
+                        <span className="text-amber-300 font-semibold">Descuento volumen {financialSummary.volume_discount_pct}% (&ge;5 piezas)</span>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
 
-              {collaboration.status === 'Acuerdo_Pendiente' && (
-                <div className="flex flex-wrap gap-2 shrink-0">
-                  <button
-                    onClick={() => setEditingTerms(!editingTerms)}
-                    className="px-4 py-3 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl min-h-touch flex items-center gap-2"
-                  >
-                    <Edit3 className="w-4 h-4" />
-                    <span>Negociar Términos</span>
-                  </button>
-                  <button
-                    onClick={handleAcceptTerms}
-                    className="px-6 py-3 bg-brand-600 hover:bg-brand-500 text-white font-bold text-xs rounded-xl min-h-touch flex items-center justify-center gap-2 shadow-lg shadow-brand-500/25"
-                  >
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>Aceptar Versión {collaboration.version_id}</span>
-                  </button>
-                </div>
-              )}
+              <div className="flex flex-wrap gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowVersions(!showVersions)}
+                  className="px-4 py-3 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-200 font-semibold text-xs rounded-xl min-h-touch flex items-center gap-2"
+                >
+                  <History className="w-4 h-4 text-brand-400" />
+                  <span>Historial ({versions.length || collaboration.version_id})</span>
+                </button>
+                {collaboration.status === 'Acuerdo_Pendiente' && (
+                  <>
+                    <button
+                      onClick={() => setEditingTerms(!editingTerms)}
+                      className="px-4 py-3 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl min-h-touch flex items-center gap-2"
+                    >
+                      <Edit3 className="w-4 h-4" />
+                      <span>Negociar Términos</span>
+                    </button>
+                    <button
+                      onClick={handleAcceptTerms}
+                      className="px-6 py-3 bg-brand-600 hover:bg-brand-500 text-white font-bold text-xs rounded-xl min-h-touch flex items-center justify-center gap-2 shadow-lg shadow-brand-500/25"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>Aceptar Versión {collaboration.version_id}</span>
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
+
+            {showVersions && (
+              <div className="pt-4 border-t border-slate-800 space-y-2">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                  Historial Inmutable de Versiones (RF-13)
+                </h4>
+                {versions.length === 0 ? (
+                  <p className="text-xs text-slate-500">Solo versión inicial v{collaboration.version_id} registrada.</p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {versions.map((ver) => (
+                      <div key={ver.id} className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="font-bold text-brand-300">Versión v{ver.version_id}</span>
+                          <span className="text-[10px] text-slate-500">
+                            {new Date(ver.created_at).toLocaleString()}
+                          </span>
+                        </div>
+                        <p className="text-slate-300">{ver.scope_description}</p>
+                        <p className="text-emerald-400 font-semibold mt-1">
+                          ${Number(ver.compensation_amount).toLocaleString()} COP
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {editingTerms && collaboration.status === 'Acuerdo_Pendiente' && (
               <form onSubmit={handleSaveTerms} className="pt-4 border-t border-slate-800 grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -590,6 +726,94 @@ export const IU06_Collaboration: React.FC<IU06CollaborationProps> = ({ campaignI
                   }}
                 />
               )}
+
+              {/* Evidences Review Panel (RF-14) */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-brand-400 font-bold text-sm">
+                    <FileCheck className="w-4 h-4" />
+                    <h4>Evidencias de Entregables ({evidences.length})</h4>
+                  </div>
+                </div>
+
+                {evidences.length === 0 ? (
+                  <p className="text-xs text-slate-400">
+                    Aún no se han cargado evidencias verificadas para esta colaboración.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {evidences.map((ev) => {
+                      const canReview =
+                        (user?.role === 'marca' || user?.role === 'administrador') &&
+                        ev.status !== 'Aprobado';
+                      return (
+                        <div key={ev.id} className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-bold text-white">{ev.deliverable_name}</span>
+                            <span
+                              className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${
+                                ev.status === 'Aprobado'
+                                  ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
+                                  : ev.status === 'Rechazado'
+                                  ? 'bg-rose-950 text-rose-300 border-rose-800'
+                                  : 'bg-amber-950 text-amber-300 border-amber-800'
+                              }`}
+                            >
+                              {ev.status}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-400 font-mono truncate">
+                            SHA-256: {ev.file_hash_sha256.slice(0, 16)}... ({ev.file_size_mb} MB)
+                          </p>
+                          {ev.review_notes && (
+                            <p className="text-[11px] text-slate-300 italic">{ev.review_notes}</p>
+                          )}
+                          <div className="flex flex-wrap items-center gap-2 pt-1">
+                            {ev.external_live_url && (
+                              <a
+                                href={ev.external_live_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1 text-[11px] text-brand-400 hover:text-brand-300 font-semibold"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                                <span>Publicación en vivo</span>
+                              </a>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEvidenceFile(ev.file_url)}
+                              className="inline-flex items-center gap-1 text-[11px] text-slate-300 hover:text-white underline"
+                            >
+                              Archivo soporte
+                            </button>
+                            {canReview && (
+                              <div className="ml-auto flex gap-2">
+                                <button
+                                  type="button"
+                                  disabled={reviewingId === ev.id}
+                                  onClick={() => handleReviewEvidence(ev.id, 'Aprobado')}
+                                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[11px] font-bold"
+                                >
+                                  Aprobar
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={reviewingId === ev.id}
+                                  onClick={() => handleReviewEvidence(ev.id, 'Rechazado')}
+                                  className="px-3 py-1.5 bg-rose-700 hover:bg-rose-600 text-white rounded-lg text-[11px] font-bold"
+                                >
+                                  Rechazar
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
 
               <ROICalculatorCard
                 initialCost={collaboration.compensation_amount || 450000}

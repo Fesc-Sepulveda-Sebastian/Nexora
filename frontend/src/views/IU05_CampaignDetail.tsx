@@ -130,7 +130,7 @@ export const IU05_CampaignDetail: React.FC<IU05CampaignDetailProps> = ({
             <span className="text-[10px] text-slate-400 uppercase font-semibold block">Ubicación Requerida</span>
             <span className="text-xs font-bold text-white flex items-center gap-1 mt-1">
               <MapPin className="w-4 h-4 text-amber-400" />
-              <span>{campaign.selection_criteria?.location || 'Cúcuta, Colombia'}</span>
+              <span>{campaign.selection_criteria?.location || 'Ubicación flexible'}</span>
             </span>
           </div>
         </div>

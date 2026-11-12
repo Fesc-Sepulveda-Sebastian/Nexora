@@ -1,18 +1,23 @@
 import json
 import secrets
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models.user import User, Profile, PrivacyRequest, OAuthConsent
+from app.models.user import User, Profile, PrivacyRequest, OAuthConsent, UserRole
 from app.schemas.user import UserOut, ProfileUpdate, ProfileOut, MediaKitOut, PrivacyRequestCreate, PrivacyRequestOut
 from app.schemas.common import APIResponse
 from app.schemas.metric_snapshot import MetricSnapshot
 from app.services.metrics_service import metrics_service
+from app.domain.nexora_rules import (
+    clasificar_creador_y_tarifa,
+    es_elegible_premium_sin_costo,
+    puede_ver_metricas,
+)
 from app.core.security import get_password_hash
 from app.core.audit_middleware import record_audit_log
-from app.api.deps import get_current_user, get_correlation_id
+from app.api.deps import get_current_user, get_optional_current_user, get_correlation_id
 
 router = APIRouter(prefix="/users", tags=["Usuarios y Media Kit"])
 
@@ -51,10 +56,15 @@ def update_profile(
     )
 
 @router.get("/{creator_id}/media-kit", response_model=APIResponse[MediaKitOut])
-def get_creator_media_kit(creator_id: str, db: Session = Depends(get_db)):
+def get_creator_media_kit(
+    creator_id: str,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+):
     """
     Generates dynamic Media Kit for creator (RF-05, RF-21).
     Distinguishes official connected API metrics from manually declared data (RN-03).
+    Applies Guía 03 access rule (`puede_ver_metricas`: creator OR admin) for internal metrics snapshots.
     """
     creator = db.query(User).filter(User.id == creator_id).first()
     if not creator or not creator.profile or not creator.is_active or creator.privacy_status == "deleted":
@@ -71,26 +81,50 @@ def get_creator_media_kit(creator_id: str, db: Session = Depends(get_db)):
             samples = []
 
     # Fetch connected snapshots from MongoDB / service
-    connected_snapshots: List[MetricSnapshot] = []
+    raw_snapshots: List[MetricSnapshot] = []
     consents = db.query(OAuthConsent).filter(OAuthConsent.user_id == creator.id, OAuthConsent.is_active == True).all()
-    
+
     for consent in consents:
         snapshots_data = metrics_service.get_snapshots_for_account(consent.account_id, consent.platform)
         for s in snapshots_data[:2]:  # Take most recent snapshots
             try:
                 snapshot_obj = MetricSnapshot.model_validate(s)
-                connected_snapshots.append(snapshot_obj)
+                raw_snapshots.append(snapshot_obj)
             except Exception:
                 pass
 
-    # Declared metrics if no API connected or for complementary platforms
-    declared_metrics = []
-    if not connected_snapshots:
+    # Determine follower tier & NEXORA Premium eligibility via pure rules
+    followers_effective = profile.followers_declared or 0
+    if raw_snapshots:
+        followers_effective = max(
+            followers_effective,
+            max((s.followers_count for s in raw_snapshots), default=0),
+        )
+    tier_info = clasificar_creador_y_tarifa(max(followers_effective, 0))
+    is_top_influencer = bool(
+        tier_info["elegible_nexora_premium"]
+        or (profile.verified_reviews_count >= 5 and profile.average_rating >= 4.5)
+    )
+    is_verified_brand = bool(
+        current_user
+        and current_user.role == UserRole.MARCA.value
+        and current_user.profile
+        and current_user.profile.is_verified
+    )
+    premium_eligible = es_elegible_premium_sin_costo(is_verified_brand, is_top_influencer)
+
+    # Guía 03 OR rule for detailed metrics visibility
+    es_creador = bool(current_user and current_user.id == creator.id)
+    es_administrador = bool(current_user and current_user.role == UserRole.ADMINISTRADOR.value)
+    can_view_metrics = puede_ver_metricas(es_creador, es_administrador)
+
+    connected_snapshots: List[MetricSnapshot] = raw_snapshots if can_view_metrics else []
+    declared_metrics: List[Dict[str, Any]] = []
+    if can_view_metrics and not connected_snapshots and (profile.followers_declared or 0) > 0:
         declared_metrics.append({
             "plataforma": "INSTAGRAM",
             "tipo": "DECLARADO",
-            "seguidores_estimados": 5400,
-            "engagement_estimado": 4.2,
+            "seguidores_estimados": profile.followers_declared,
             "badge": "Dato Declarado por Creador (RN-03)",
             "origen": "DECLARADO_MANUAL"
         })
@@ -98,15 +132,18 @@ def get_creator_media_kit(creator_id: str, db: Session = Depends(get_db)):
     media_kit = MediaKitOut(
         creator_id=creator.id,
         display_name=profile.display_name,
-        bio=profile.bio or "Creador de contenido enfocado en micro-audiencias y alta fidelidad comunitaria.",
-        location_declared=profile.location_declared or "Cúcuta, Colombia",
-        niche=profile.niche or "Gastronomía",
+        bio=profile.bio or "Creador de contenido enfocado en audiencias de alto valor.",
+        location_declared=profile.location_declared or "No especificada",
+        niche=profile.niche or "General",
         languages=profile.languages or "Español",
         avatar_url=profile.avatar_url or "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80",
         version=profile.current_media_kit_version,
         verified_reviews_count=profile.verified_reviews_count,
         average_rating=profile.average_rating,
         portfolio_samples=samples,
+        creator_tier=tier_info["nivel"],
+        nexora_premium_eligible=premium_eligible,
+        metrics_restricted=not can_view_metrics,
         connected_metrics=connected_snapshots,
         declared_metrics=declared_metrics,
         generated_at_utc=datetime.utcnow()

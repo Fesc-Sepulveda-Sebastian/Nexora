@@ -10,6 +10,7 @@ from app.models.collaboration import (
     CollaborationAgreementVersion,
     CollaborationStatus,
 )
+from app.models.application import DeliverableEvidence
 from app.models.user import User, UserRole
 from app.schemas.collaboration import (
     CollaborationAgreementUpdate,
@@ -19,7 +20,14 @@ from app.schemas.collaboration import (
     ROICalculatorInput,
     ROICalculatorOutput,
 )
+from app.schemas.application import DeliverableEvidenceOut
 from app.schemas.common import APIResponse
+from app.domain.nexora_rules import (
+    calcular_comision_nexora,
+    calcular_costo_total_campana,
+    calcular_valor_colaboracion,
+    evaluar_viabilidad_financiera,
+)
 from app.core.audit_middleware import record_audit_log
 from app.api.deps import get_current_user, get_correlation_id
 
@@ -137,6 +145,36 @@ def get_collaboration_versions(
     return APIResponse(
         success=True,
         data=[CollaborationAgreementVersionOut.model_validate(v) for v in versions],
+    )
+
+
+@router.get(
+    "/{collaboration_id}/evidences",
+    response_model=APIResponse[List[DeliverableEvidenceOut]],
+)
+def get_collaboration_evidences(
+    collaboration_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    agreement = (
+        db.query(CollaborationAgreement)
+        .filter(CollaborationAgreement.id == collaboration_id)
+        .first()
+    )
+    if not agreement:
+        raise HTTPException(status_code=404, detail="Acuerdo de colaboración no encontrado")
+    _assert_collaboration_access(agreement, current_user)
+
+    evidences = (
+        db.query(DeliverableEvidence)
+        .filter(DeliverableEvidence.application_id == agreement.application_id)
+        .order_by(DeliverableEvidence.submitted_at.desc())
+        .all()
+    )
+    return APIResponse(
+        success=True,
+        data=[DeliverableEvidenceOut.model_validate(e) for e in evidences],
     )
 
 
@@ -399,6 +437,66 @@ def close_collaboration(
         message="Colaboración cerrada exitosamente. Calificaciones bilaterales habilitadas (RN-05).",
         data=CollaborationAgreementOut.model_validate(agreement),
         correlation_id=correlation_id,
+    )
+
+
+@router.get("/{collaboration_id}/financial-summary")
+def get_collaboration_financial_summary(
+    collaboration_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Calcula comisión NEXORA (10%), costo total y descuento por volumen (>= 5 piezas)
+    reutilizando las funciones puras del dominio (Guías 03, 05 y 10).
+    """
+    agreement = (
+        db.query(CollaborationAgreement)
+        .filter(CollaborationAgreement.id == collaboration_id)
+        .first()
+    )
+    if not agreement:
+        raise HTTPException(status_code=404, detail="Acuerdo de colaboración no encontrado")
+    _assert_collaboration_access(agreement, current_user)
+
+    compensation = float(agreement.compensation_amount or 0.0)
+    commission = calcular_comision_nexora(compensation, 0.10)
+    total_cost = calcular_costo_total_campana(compensation, commission)
+
+    total_pieces = 1
+    try:
+        terms = json.loads(agreement.deliverables_terms or "[]")
+        if isinstance(terms, list) and terms:
+            qty_sum = sum(max(int(item.get("qty", 1)), 0) for item in terms if isinstance(item, dict))
+            if qty_sum > 0:
+                total_pieces = qty_sum
+    except Exception:
+        total_pieces = 1
+
+    unit_rate = round(compensation / total_pieces, 2) if total_pieces > 0 else compensation
+    volume_calc = calcular_valor_colaboracion(unit_rate, disponible=True, piezas=total_pieces)
+    campaign_budget = float(agreement.campaign.budget) if agreement.campaign and agreement.campaign.budget else compensation
+    viability = evaluar_viabilidad_financiera(
+        tarifa=unit_rate,
+        publicaciones=total_pieces,
+        presupuesto=max(campaign_budget, compensation),
+    )
+
+    return APIResponse(
+        success=True,
+        data={
+            "collaboration_id": agreement.id,
+            "compensation_amount": compensation,
+            "nexora_commission_rate": 0.10,
+            "nexora_commission_amount": commission,
+            "total_campaign_cost": total_cost,
+            "total_pieces": total_pieces,
+            "volume_discount_applied": volume_calc["descuento_porcentaje"] > 0,
+            "volume_discount_pct": volume_calc["descuento_porcentaje"],
+            "volume_discounted_total": volume_calc["total"],
+            "viable": viability["aprobado"],
+            "budget_difference": viability["diferencia"],
+        },
     )
 
 
