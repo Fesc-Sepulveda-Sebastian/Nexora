@@ -28,7 +28,11 @@ export const RealtimeChat: React.FC<RealtimeChatProps> = ({
 
   // Connect WebSocket for real-time live events
   useEffect(() => {
-    const wsUrl = `ws://localhost:8080/ws/collaboration/${collaborationId}`;
+    const token = api.getToken();
+    if (!token || !collaborationId) return;
+
+    const apiBase = api.getWsBaseUrl();
+    const wsUrl = `${apiBase}/ws/collaboration/${collaborationId}?token=${encodeURIComponent(token)}`;
     let socket: WebSocket | null = null;
     try {
       socket = new WebSocket(wsUrl);

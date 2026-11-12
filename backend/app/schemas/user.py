@@ -1,18 +1,25 @@
+from enum import Enum
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from app.models.user import UserRole
 from app.schemas.metric_snapshot import MetricSnapshot
+
+class PublicUserRole(str, Enum):
+    MARCA = "marca"
+    CREADOR = "creador"
 
 class UserBase(BaseModel):
     email: EmailStr
     role: UserRole
 
-class UserCreate(UserBase):
+class UserCreate(BaseModel):
+    email: EmailStr
+    role: PublicUserRole
     password: str = Field(..., min_length=8)
     display_name: str = Field(..., min_length=2)
-    location_declared: Optional[str] = "Cúcuta, Colombia"
-    niche: Optional[str] = "Gastronomía"
+    location_declared: Optional[str] = None
+    niche: Optional[str] = None
     terms_accepted: bool = Field(..., description="Aceptación de términos y condiciones obligatoria")
 
 class UserLogin(BaseModel):
@@ -52,8 +59,7 @@ class ProfileOut(ProfileBase):
     current_media_kit_version: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class UserOut(BaseModel):
     id: str
@@ -64,8 +70,7 @@ class UserOut(BaseModel):
     profile: Optional[ProfileOut] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # Dynamic Media Kit schema (RF-05, RF-21)
 class MediaKitOut(BaseModel):
@@ -92,8 +97,7 @@ class OAuthConsentOut(BaseModel):
     is_active: bool
     expires_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class PrivacyRequestCreate(BaseModel):
     notes: Optional[str] = None
@@ -103,3 +107,5 @@ class PrivacyRequestOut(BaseModel):
     status: str
     requested_at: datetime
     processed_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)

@@ -1,6 +1,6 @@
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.models.collaboration import CollaborationStatus, DisputeStatus
 
 class CollaborationAgreementCreate(BaseModel):
@@ -12,10 +12,24 @@ class CollaborationAgreementCreate(BaseModel):
 
 class CollaborationAgreementUpdate(BaseModel):
     # Any update to terms increments version_id and resets acceptances (RF-13)
+    expected_version: int = Field(..., description="Versión esperada del acuerdo para control de concurrencia optimista (RF-13)")
     scope_description: Optional[str] = None
     deliverables_terms: Optional[List[Dict[str, Any]]] = None
     compensation_amount: Optional[float] = None
     deadline: Optional[datetime] = None
+
+class CollaborationAgreementVersionOut(BaseModel):
+    id: str
+    collaboration_id: str
+    version_id: int
+    scope_description: str
+    deliverables_terms: str
+    compensation_amount: float
+    deadline: datetime
+    edited_by_id: Optional[str] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
 
 class CollaborationAgreementAccept(BaseModel):
     accepted_version_id: int = Field(..., description="Versión exacta del acuerdo que el usuario está aceptando en línea")
@@ -39,8 +53,7 @@ class CollaborationAgreementOut(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DisputeCreate(BaseModel):
     reason: str = Field(..., min_length=15, description="Motivo detallado del reclamo o controversia")
@@ -65,8 +78,7 @@ class DisputeOut(BaseModel):
     created_at: datetime
     resolved_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # RN-04: Estimated ROI Calculation Schema
 class ROICalculatorInput(BaseModel):

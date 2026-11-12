@@ -5,7 +5,7 @@ interface KPICardProps {
   label: string;
   value: string | number;
   subtitle?: string;
-  sourceType: 'API_CONECTADA' | 'DECLARADO' | 'NO_DISPONIBLE';
+  sourceType: 'API_CONECTADA' | 'DEMO_SIMULADO' | 'DECLARADO' | 'NO_DISPONIBLE';
   captureDateUtc?: string;
   period?: string;
   formulaDetails?: {
@@ -37,6 +37,11 @@ export const KPICard: React.FC<KPICardProps> = ({
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950/80 text-emerald-400 border border-emerald-800/60">
               <ShieldCheck className="w-3 h-3 text-emerald-400 shrink-0" />
               API Oficial Verificada
+            </span>
+          ) : sourceType === 'DEMO_SIMULADO' ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-950/80 text-indigo-300 border border-indigo-700/60">
+              <Info className="w-3 h-3 text-indigo-400 shrink-0" />
+              Simulado (DEMO)
             </span>
           ) : (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-950/80 text-amber-400 border border-amber-800/60">

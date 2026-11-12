@@ -1,13 +1,24 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useOfflineSync } from '../../context/OfflineSyncContext';
 import { GitCompare, CheckCircle2, Server, Smartphone, X } from 'lucide-react';
 
 export const ConflictResolutionModal: React.FC = () => {
   const { conflict, resolveConflict } = useOfflineSync();
+  const [resolving, setResolving] = useState(false);
 
   if (!conflict) return null;
 
   const { localDraft, serverVersion, serverData } = conflict;
+
+  const handleResolve = async (choice: 'keep_local' | 'keep_server') => {
+    if (resolving) return;
+    setResolving(true);
+    try {
+      await resolveConflict(choice);
+    } finally {
+      setResolving(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
@@ -18,8 +29,9 @@ export const ConflictResolutionModal: React.FC = () => {
             <h2 className="text-lg md:text-xl font-bold">Conflicto de Versión Detectado (HTTP 409)</h2>
           </div>
           <button 
-            onClick={() => resolveConflict('keep_server')}
-            className="text-slate-400 hover:text-slate-200 min-w-touch min-h-touch flex items-center justify-center"
+            onClick={() => handleResolve('keep_server')}
+            disabled={resolving}
+            className="text-slate-400 hover:text-slate-200 min-w-touch min-h-touch flex items-center justify-center disabled:opacity-50"
             aria-label="Cerrar modal"
           >
             <X className="w-5 h-5" />
@@ -46,11 +58,12 @@ export const ConflictResolutionModal: React.FC = () => {
               </div>
             </div>
             <button
-              onClick={() => resolveConflict('keep_server')}
-              className="mt-4 w-full bg-slate-800 hover:bg-slate-700 text-white font-medium py-3 rounded-lg flex items-center justify-center gap-2 min-h-touch transition-colors text-sm"
+              onClick={() => handleResolve('keep_server')}
+              disabled={resolving}
+              className="mt-4 w-full bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white font-medium py-3 rounded-lg flex items-center justify-center gap-2 min-h-touch transition-colors text-sm"
             >
               <CheckCircle2 className="w-4 h-4 text-brand-400" />
-              Conservar Versión Servidor
+              {resolving ? 'Aplicando...' : 'Conservar Versión Servidor'}
             </button>
           </div>
 
@@ -68,11 +81,12 @@ export const ConflictResolutionModal: React.FC = () => {
               </div>
             </div>
             <button
-              onClick={() => resolveConflict('keep_local')}
-              className="mt-4 w-full bg-brand-600 hover:bg-brand-500 text-white font-medium py-3 rounded-lg flex items-center justify-center gap-2 min-h-touch transition-colors text-sm shadow-lg shadow-brand-500/20"
+              onClick={() => handleResolve('keep_local')}
+              disabled={resolving}
+              className="mt-4 w-full bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white font-medium py-3 rounded-lg flex items-center justify-center gap-2 min-h-touch transition-colors text-sm shadow-lg shadow-brand-500/20"
             >
               <CheckCircle2 className="w-4 h-4 text-emerald-300" />
-              Sobrescribir con Local
+              {resolving ? 'Sincronizando...' : 'Sobrescribir con Local'}
             </button>
           </div>
         </div>

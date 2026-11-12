@@ -35,7 +35,8 @@ def record_audit_log(
     estado_anterior: Optional[str],
     estado_nuevo: Optional[str],
     resultado: str = "SUCCESS",
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None,
+    commit: bool = True
 ) -> AuditLog:
     """
     RNF-11 & RNF-20: Persists commercial transactions and state changes to audit_logs,
@@ -63,10 +64,11 @@ def record_audit_log(
     )
     
     db.add(log_entry)
-    try:
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Failed to record audit log: {e}")
-        
+    if commit:
+        try:
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to record audit log: {e}")
+
     return log_entry

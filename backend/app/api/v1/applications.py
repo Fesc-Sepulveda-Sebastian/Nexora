@@ -1,21 +1,24 @@
+import hashlib
 import json
 import uuid
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Header
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.campaign import Campaign, CampaignStatus
 from app.models.application import Application, ApplicationStatus, DeliverableEvidence, DeliverableStatus
-from app.models.collaboration import CollaborationAgreement, CollaborationStatus
+from app.models.collaboration import CollaborationAgreement, CollaborationAgreementVersion, CollaborationStatus
 from app.models.audit import IdempotencyRecord
 from app.models.user import User, UserRole
 from app.schemas.application import (
     ApplicationCreate, ApplicationStatusUpdate, ApplicationOut,
-    DeliverableEvidenceCreate, DeliverableEvidenceOut
+    DeliverableEvidenceCreate, DeliverableEvidenceOut, DeliverableEvidenceReview
 )
 from app.schemas.common import APIResponse
 from app.core.audit_middleware import record_audit_log
+from app.services.storage_service import storage_service
 from app.api.deps import get_current_user, require_role, get_correlation_id
 
 router = APIRouter(tags=["Postulaciones y Entregables"])
@@ -34,10 +37,24 @@ def apply_to_campaign(
     Uses Idempotency-Key to prevent double submissions upon reconnection.
     Freezes Media Kit version snapshot at application time (RF-10).
     """
-    # 1. Idempotency Check
+    endpoint = f"/campaigns/{campaign_id}/apply"
+    payload_hash = hashlib.sha256(
+        json.dumps(app_in.model_dump(mode="json"), sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+    # 1. Idempotency Check (isolated per actor + endpoint + payload_hash)
     if idempotency_key:
-        record = db.query(IdempotencyRecord).filter(IdempotencyRecord.idempotency_key == idempotency_key).first()
+        record = db.query(IdempotencyRecord).filter(
+            IdempotencyRecord.idempotency_key == idempotency_key,
+            IdempotencyRecord.actor_id == current_user.id,
+            IdempotencyRecord.endpoint == endpoint,
+        ).first()
         if record:
+            if record.request_hash != payload_hash:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Idempotency-Key ya utilizada previamente con un payload diferente."
+                )
             try:
                 cached_data = json.loads(record.response_body)
                 return APIResponse(
@@ -46,8 +63,11 @@ def apply_to_campaign(
                     data=ApplicationOut.model_validate(cached_data),
                     correlation_id=correlation_id
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="No se pudo reconstruir la respuesta idempotente previa."
+                ) from exc
 
     # 2. Check campaign existence and published state
     campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
@@ -92,22 +112,48 @@ def apply_to_campaign(
         idempotency_key=idempotency_key
     )
     db.add(application)
-    db.commit()
-    db.refresh(application)
+    try:
+        db.flush()
+        db.refresh(application)
 
-    # 5. Record Idempotency cache
-    app_out = ApplicationOut.model_validate(application)
-    if idempotency_key:
-        idem = IdempotencyRecord(
-            idempotency_key=idempotency_key,
-            actor_id=current_user.id,
-            endpoint=f"/campaigns/{campaign_id}/apply",
-            request_hash=str(hash(app_in.creative_proposal)),
-            response_code=201,
-            response_body=json.dumps(app_out.model_dump(), default=str)
-        )
-        db.add(idem)
+        app_out = ApplicationOut.model_validate(application)
+        if idempotency_key:
+            idem = IdempotencyRecord(
+                idempotency_key=idempotency_key,
+                actor_id=current_user.id,
+                endpoint=endpoint,
+                request_hash=payload_hash,
+                response_code=201,
+                response_body=json.dumps(app_out.model_dump(mode="json"))
+            )
+            db.add(idem)
+
         db.commit()
+    except IntegrityError:
+        db.rollback()
+        if idempotency_key:
+            record = db.query(IdempotencyRecord).filter(
+                IdempotencyRecord.idempotency_key == idempotency_key,
+                IdempotencyRecord.actor_id == current_user.id,
+                IdempotencyRecord.endpoint == endpoint,
+            ).first()
+            if record:
+                if record.request_hash != payload_hash:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Idempotency-Key ya utilizada previamente con un payload diferente."
+                    )
+                cached_data = json.loads(record.response_body)
+                return APIResponse(
+                    success=True,
+                    message="Respuesta recuperada por Idempotency-Key",
+                    data=ApplicationOut.model_validate(cached_data),
+                    correlation_id=correlation_id
+                )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflicto al registrar la postulación o clave de idempotencia duplicada."
+        )
 
     record_audit_log(
         db=db,
@@ -188,23 +234,40 @@ def update_application_status(
     app.status = new_state
     app.updated_at = datetime.utcnow()
 
-    # If accepted, automatically initiate Collaboration Agreement
+    # If accepted, automatically initiate Collaboration Agreement and initial v1 history snapshot
     if new_state == ApplicationStatus.ACEPTADA and not app.agreement:
+        deadline_dt = campaign.end_date or (datetime.utcnow() + timedelta(days=14))
+        scope_desc = f"Colaboración para campaña: {campaign.title}"
+        deliv_terms = campaign.deliverables or "[]"
+        comp_amount = campaign.budget or 0.0
+
         agreement = CollaborationAgreement(
             application_id=app.id,
             campaign_id=campaign.id,
             brand_id=campaign.brand_id,
             creator_id=app.creator_id,
             version_id=1,
-            scope_description=f"Colaboración para campaña: {campaign.title}",
-            deliverables_terms=campaign.deliverables or "[]",
-            compensation_amount=campaign.budget or 0.0,
-            deadline=campaign.end_date or (datetime.utcnow() + datetime.timedelta(days=14)),
+            scope_description=scope_desc,
+            deliverables_terms=deliv_terms,
+            compensation_amount=comp_amount,
+            deadline=deadline_dt,
             brand_accepted=False,
             creator_accepted=False,
             status=CollaborationStatus.ACUERDO_PENDIENTE
         )
         db.add(agreement)
+        db.flush()
+
+        initial_version = CollaborationAgreementVersion(
+            collaboration_id=agreement.id,
+            version_id=1,
+            scope_description=scope_desc,
+            deliverables_terms=deliv_terms,
+            compensation_amount=comp_amount,
+            deadline=deadline_dt,
+            edited_by_id=current_user.id,
+        )
+        db.add(initial_version)
 
     db.commit()
     db.refresh(app)
@@ -238,7 +301,8 @@ def submit_deliverable_evidence(
     correlation_id: str = Depends(get_correlation_id)
 ):
     """
-    RF-14: Uploads evidence for deliverable, recording SHA-256 hash and setting status to En_Revision.
+    RF-14: Confirms uploaded evidence for deliverable after verifying the object exists in storage,
+    matches MIME/size policies, and passes server-side SHA-256 integrity verification.
     """
     app = db.query(Application).filter(Application.id == application_id).first()
     if not app:
@@ -247,36 +311,137 @@ def submit_deliverable_evidence(
     if app.creator_id != current_user.id:
         raise HTTPException(status_code=403, detail="No autorizado para subir evidencias en esta postulación")
 
-    evidence = DeliverableEvidence(
-        application_id=application_id,
-        deliverable_name=evidence_in.deliverable_name,
-        file_url=evidence_in.file_url,
-        file_hash_sha256=evidence_in.file_hash_sha256,
-        file_size_mb=evidence_in.file_size_mb,
-        external_live_url=evidence_in.external_live_url,
-        status=DeliverableStatus.EN_REVISION,
-        submitted_at=datetime.utcnow()
-    )
-    db.add(evidence)
-    db.commit()
-    db.refresh(evidence)
+    app_status = app.status.value if hasattr(app.status, "value") else app.status
+    if app_status != ApplicationStatus.ACEPTADA.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Solo se pueden subir evidencias para postulaciones aceptadas."
+        )
 
-    record_audit_log(
-        db=db,
-        correlation_id=correlation_id,
-        actor_id=current_user.id,
-        rol=current_user.role,
-        entidad="deliverable_evidence",
-        entidad_id=evidence.id,
-        operacion="SUBMIT_EVIDENCE",
-        estado_anterior=None,
-        estado_nuevo=DeliverableStatus.EN_REVISION.value,
-        resultado="SUCCESS"
-    )
+    if app.agreement:
+        agreement_status = app.agreement.status.value if hasattr(app.agreement.status, "value") else app.agreement.status
+        if agreement_status not in (
+            CollaborationStatus.EN_EJECUCION.value,
+            CollaborationStatus.EN_REVISION.value,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"El acuerdo debe estar en ejecución para cargar evidencias. Estado actual: {agreement_status}"
+            )
+
+    try:
+        verified_sha256, actual_size_bytes, _ = storage_service.verify_uploaded_object(
+            file_key=evidence_in.file_key,
+            file_url=evidence_in.file_url,
+            expected_sha256=evidence_in.file_hash_sha256,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    verified_size_mb = max(round(actual_size_bytes / (1024 * 1024), 4), 0.0001)
+    now = datetime.utcnow()
+
+    try:
+        evidence = DeliverableEvidence(
+            application_id=application_id,
+            deliverable_name=evidence_in.deliverable_name,
+            file_url=evidence_in.file_url,
+            file_hash_sha256=verified_sha256,
+            file_size_mb=verified_size_mb,
+            external_live_url=evidence_in.external_live_url,
+            status=DeliverableStatus.EN_REVISION.value,
+            submitted_at=now
+        )
+        db.add(evidence)
+        db.flush()
+
+        if app.agreement:
+            agreement_status = app.agreement.status.value if hasattr(app.agreement.status, "value") else app.agreement.status
+            if agreement_status == CollaborationStatus.EN_EJECUCION.value:
+                app.agreement.status = CollaborationStatus.EN_REVISION.value
+                app.agreement.updated_at = now
+
+        record_audit_log(
+            db=db,
+            correlation_id=correlation_id,
+            actor_id=current_user.id,
+            rol=current_user.role,
+            entidad="deliverable_evidence",
+            entidad_id=evidence.id,
+            operacion="SUBMIT_EVIDENCE",
+            estado_anterior=None,
+            estado_nuevo=DeliverableStatus.EN_REVISION.value,
+            resultado="SUCCESS",
+            commit=False
+        )
+
+        db.commit()
+        db.refresh(evidence)
+    except Exception:
+        db.rollback()
+        raise
 
     return APIResponse(
         success=True,
-        message="Evidencia de entregable cargada exitosamente. Notificada a la marca para revisión.",
+        message="Evidencia de entregable cargada y verificada por SHA-256 en almacenamiento. Estado: En Revisión.",
+        data=DeliverableEvidenceOut.model_validate(evidence),
+        correlation_id=correlation_id
+    )
+
+
+@router.patch("/evidences/{evidence_id}/review", response_model=APIResponse[DeliverableEvidenceOut])
+def review_deliverable_evidence(
+    evidence_id: str,
+    review_in: DeliverableEvidenceReview,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    correlation_id: str = Depends(get_correlation_id)
+):
+    evidence = db.query(DeliverableEvidence).filter(DeliverableEvidence.id == evidence_id).first()
+    if not evidence:
+        raise HTTPException(status_code=404, detail="Evidencia no encontrada")
+
+    app = evidence.application
+    campaign = app.campaign
+    if campaign.brand_id != current_user.id and current_user.role != UserRole.ADMINISTRADOR.value:
+        raise HTTPException(status_code=403, detail="No autorizado para revisar esta evidencia")
+
+    if review_in.status not in (DeliverableStatus.APROBADO, DeliverableStatus.RECHAZADO):
+        raise HTTPException(status_code=400, detail="La revisión solo admite estado Aprobado o Rechazado")
+
+    previous_status = evidence.status.value if hasattr(evidence.status, "value") else evidence.status
+    now = datetime.utcnow()
+
+    try:
+        evidence.status = review_in.status.value
+        evidence.review_notes = review_in.review_notes
+        evidence.reviewed_at = now
+
+        record_audit_log(
+            db=db,
+            correlation_id=correlation_id,
+            actor_id=current_user.id,
+            rol=current_user.role,
+            entidad="deliverable_evidence",
+            entidad_id=evidence.id,
+            operacion="REVIEW_EVIDENCE",
+            estado_anterior=previous_status,
+            estado_nuevo=review_in.status.value,
+            resultado="SUCCESS",
+            commit=False
+        )
+        db.commit()
+        db.refresh(evidence)
+    except Exception:
+        db.rollback()
+        raise
+
+    return APIResponse(
+        success=True,
+        message=f"Evidencia marcada como '{review_in.status.value}'.",
         data=DeliverableEvidenceOut.model_validate(evidence),
         correlation_id=correlation_id
     )

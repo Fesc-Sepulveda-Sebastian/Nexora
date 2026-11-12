@@ -3,6 +3,7 @@ import uuid
 from typing import Optional, List
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Header, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.campaign import Campaign, CampaignStatus, CompensationType
@@ -72,12 +73,38 @@ def list_campaigns(
     min_budget: Optional[float] = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     correlation_id: str = Depends(get_correlation_id)
 ):
     query = db.query(Campaign)
+
     if status_filter:
+        if status_filter == CampaignStatus.BORRADOR.value:
+            if current_user.role == UserRole.CREADOR.value:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="No tiene permisos para listar borradores de campañas."
+                )
+            if current_user.role != UserRole.ADMINISTRADOR.value:
+                query = query.filter(Campaign.brand_id == current_user.id)
+        elif status_filter == CampaignStatus.CANCELADA.value:
+            if current_user.role != UserRole.ADMINISTRADOR.value:
+                query = query.filter(Campaign.brand_id == current_user.id)
         query = query.filter(Campaign.status == status_filter)
+    else:
+        if current_user.role != UserRole.ADMINISTRADOR.value:
+            query = query.filter(
+                or_(
+                    Campaign.status.in_([
+                        CampaignStatus.PUBLICADA.value,
+                        CampaignStatus.EN_EJECUCION.value,
+                        CampaignStatus.CERRADA.value,
+                    ]),
+                    Campaign.brand_id == current_user.id,
+                )
+            )
+
     if niche:
         query = query.filter(Campaign.niche.ilike(f"%{niche}%"))
     if min_budget:
@@ -101,10 +128,22 @@ def list_campaigns(
     )
 
 @router.get("/{campaign_id}", response_model=APIResponse[CampaignOut])
-def get_campaign(campaign_id: str, db: Session = Depends(get_db)):
+def get_campaign(
+    campaign_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaña no encontrada")
+
+    if campaign.status in (CampaignStatus.BORRADOR.value, CampaignStatus.CANCELADA.value):
+        if campaign.brand_id != current_user.id and current_user.role != UserRole.ADMINISTRADOR.value:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No autorizado para ver esta campaña."
+            )
+
     return APIResponse(success=True, data=_format_campaign_out(campaign))
 
 @router.put("/{campaign_id}", response_model=APIResponse[CampaignOut])
@@ -143,7 +182,7 @@ def update_campaign(
                 "error": "VERSION_CONFLICT",
                 "message": "La campaña fue modificada en el servidor mientras editaba sin conexión.",
                 "server_version": campaign.version_id,
-                "server_data": _format_campaign_out(campaign).model_dump()
+                "server_data": _format_campaign_out(campaign).model_dump(mode="json")
             }
         )
 

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from enum import Enum
-from sqlalchemy import Column, String, DateTime, ForeignKey, Text, Integer, Float, Boolean
+from sqlalchemy import Column, String, DateTime, ForeignKey, Text, Integer, Float, Boolean, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -54,6 +54,26 @@ class CollaborationAgreement(Base):
     disputes = relationship("Dispute", back_populates="collaboration", cascade="all, delete-orphan")
     messages = relationship("Message", back_populates="collaboration", cascade="all, delete-orphan")
     ratings = relationship("Rating", back_populates="collaboration", cascade="all, delete-orphan")
+    versions = relationship("CollaborationAgreementVersion", back_populates="collaboration", cascade="all, delete-orphan", order_by="CollaborationAgreementVersion.version_id.asc()")
+
+
+class CollaborationAgreementVersion(Base):
+    __tablename__ = "collaboration_agreement_versions"
+    __table_args__ = (
+        UniqueConstraint("collaboration_id", "version_id", name="uq_collab_version_number"),
+    )
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    collaboration_id = Column(String(36), ForeignKey("collaboration_agreements.id"), nullable=False, index=True)
+    version_id = Column(Integer, nullable=False)
+    scope_description = Column(Text, nullable=False)
+    deliverables_terms = Column(Text, nullable=False)
+    compensation_amount = Column(Float, nullable=False)
+    deadline = Column(DateTime, nullable=False)
+    edited_by_id = Column(String(36), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    collaboration = relationship("CollaborationAgreement", back_populates="versions")
 
 
 class Dispute(Base):

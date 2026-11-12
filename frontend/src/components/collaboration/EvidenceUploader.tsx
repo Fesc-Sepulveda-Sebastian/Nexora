@@ -54,30 +54,50 @@ export const EvidenceUploader: React.FC<EvidenceUploaderProps> = ({
     try {
       // 1. Calculate SHA-256 integrity hash
       const sha256 = await calculateSHA256(selectedFile);
-      const sizeMb = Number((selectedFile.size / (1024 * 1024)).toFixed(2));
+      const rawSizeMb = selectedFile.size / (1024 * 1024);
+      const sizeMb = Math.max(Number(rawSizeMb.toFixed(4)), 0.0001);
+      const contentType = selectedFile.type || 'image/jpeg';
 
       // 2. Request presigned upload URL from backend (RF-14)
       const { data: storageData } = await api.request<any>('/storage/presigned-url', {
         method: 'POST',
         body: {
           filename: selectedFile.name,
-          content_type: selectedFile.type || 'image/jpeg'
+          content_type: contentType
         }
       });
 
-      // 3. Register evidence record in backend with SHA-256
+      // 3. Perform actual PUT upload of the binary file to storage (MinIO S3 or signed backend storage)
+      const uploadTargetUrl = storageData.upload_url.startsWith('http')
+        ? storageData.upload_url
+        : `${api.getApiOrigin()}${storageData.upload_url}`;
+
+      const uploadResponse = await fetch(uploadTargetUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': storageData.content_type || contentType,
+        },
+        body: selectedFile,
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error(`Error al subir el archivo al almacenamiento (${uploadResponse.status}).`);
+      }
+
+      // 4. Confirm evidence metadata in backend (server verifies stored bytes + SHA-256)
       await api.request(`/applications/${applicationId}/evidences`, {
         method: 'POST',
         body: {
           deliverable_name: deliverableName,
+          file_key: storageData.file_key,
           file_url: storageData.public_url,
           file_hash_sha256: sha256,
-          file_size_mb: sizeMb > 0 ? sizeMb : 0.2,
+          file_size_mb: sizeMb,
           external_live_url: liveUrl || undefined
         }
       });
 
-      setSuccessMsg('¡Evidencia cargada e integridad SHA-256 verificada! Estado: En Revisión.');
+      setSuccessMsg('¡Archivo subido e integridad SHA-256 verificada en almacenamiento! Estado: En Revisión.');
       setSelectedFile(null);
       setLiveUrl('');
       onEvidenceUploaded();

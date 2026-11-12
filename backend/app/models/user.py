@@ -43,7 +43,7 @@ class Profile(Base):
     avatar_url = Column(String(500), nullable=True)
     portfolio_samples = Column(Text, nullable=True)  # JSON string of approved content URLs/thumbnails
     verified_reviews_count = Column(Integer, default=0)
-    average_rating = Column(Float, default=5.0)
+    average_rating = Column(Float, default=0.0)
     current_media_kit_version = Column(Integer, default=1)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -81,3 +81,7 @@ class PrivacyRequest(Base):
     processed_at = Column(DateTime, nullable=True)
 
     user = relationship("User", back_populates="privacy_requests")
+
+    @property
+    def requested_at(self) -> datetime:
+        return self.created_at

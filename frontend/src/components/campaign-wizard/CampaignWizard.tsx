@@ -1,19 +1,31 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Campaign, DeliverableItem, SelectionCriteria } from '../../types';
 import { api } from '../../services/api';
-import { indexDB } from '../../db/indexdb';
+import { indexDB, OfflineDraft } from '../../db/indexdb';
 import { useOfflineSync } from '../../context/OfflineSyncContext';
 import { CheckCircle2, ChevronRight, ChevronLeft, Save, Send, AlertCircle, Plus, Trash2 } from 'lucide-react';
 
 interface CampaignWizardProps {
+  initialDraft?: OfflineDraft | null;
+  onDraftSaved?: () => void;
   onCampaignCreated: (campaign: Campaign) => void;
 }
 
-export const CampaignWizard: React.FC<CampaignWizardProps> = ({ onCampaignCreated }) => {
+export const CampaignWizard: React.FC<CampaignWizardProps> = ({
+  initialDraft,
+  onDraftSaved,
+  onCampaignCreated
+}) => {
   const { isOnline } = useOfflineSync();
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [infoMsg, setInfoMsg] = useState<string | null>(null);
+
+  // Draft tracking for offline/online continuity
+  const [localDraftId, setLocalDraftId] = useState<string | undefined>(undefined);
+  const [serverCampaignId, setServerCampaignId] = useState<string | undefined>(undefined);
+  const [versionId, setVersionId] = useState<number>(1);
 
   // Form State
   const [title, setTitle] = useState('');
@@ -34,6 +46,33 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({ onCampaignCreate
     location: 'Cúcuta, Colombia',
     platforms: ['Instagram']
   });
+
+  useEffect(() => {
+    if (initialDraft) {
+      setLocalDraftId(initialDraft.local_id);
+      setServerCampaignId(initialDraft.server_id);
+      setVersionId(initialDraft.version_id || 1);
+      setTitle(initialDraft.title || '');
+      setObjective(initialDraft.objective || '');
+      setNiche(initialDraft.niche || 'Gastronomía');
+      setCompensationType((initialDraft.compensation_type as any) || 'pago_fijo');
+      setBudget(initialDraft.budget ?? 0);
+      setCompensationNotes(initialDraft.compensation_notes || '');
+      if (initialDraft.start_date) {
+        setStartDate(initialDraft.start_date.split('T')[0]);
+      }
+      if (initialDraft.end_date) {
+        setEndDate(initialDraft.end_date.split('T')[0]);
+      }
+      if (initialDraft.deliverables?.length) {
+        setDeliverables(initialDraft.deliverables);
+      }
+      if (initialDraft.selection_criteria) {
+        setSelectionCriteria(initialDraft.selection_criteria);
+      }
+      setInfoMsg(`Borrador "${initialDraft.title}" cargado desde almacenamiento local.`);
+    }
+  }, [initialDraft]);
 
   const handleAddDeliverable = () => {
     setDeliverables([...deliverables, { format: 'Story', qty: 2, specs: 'Stories con mención a la cuenta oficial' }]);
@@ -60,6 +99,7 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({ onCampaignCreate
 
   const handleSaveDraft = async () => {
     setErrorMsg(null);
+    setInfoMsg(null);
     try {
       const draftData = {
         title: title || 'Borrador sin título',
@@ -75,24 +115,58 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({ onCampaignCreate
       };
 
       if (!isOnline) {
-        // Save local draft in IndexedDB (max 5)
+        const draftId = localDraftId || `draft_${Date.now()}`;
         await indexDB.saveLocalDraft({
-          local_id: 'draft_' + Date.now(),
+          local_id: draftId,
+          server_id: serverCampaignId,
           ...draftData,
-          version_id: 1,
+          version_id: versionId,
           sync_status: 'Pendiente',
           last_modified: new Date().toISOString()
         });
-        alert('Borrador guardado localmente en tu dispositivo (Modo Offline). Se sincronizará al recuperar conexión.');
+        setLocalDraftId(draftId);
+
+        // Enqueue mutation in Outbox for automatic sync when back online
+        await indexDB.addToOutbox({
+          id: `outbox_${draftId}`,
+          action_type: 'SAVE_DRAFT',
+          method: serverCampaignId ? 'PUT' : 'POST',
+          endpoint: serverCampaignId ? `/campaigns/${serverCampaignId}` : '/campaigns',
+          payload: serverCampaignId ? { ...draftData, version_id: versionId } : draftData,
+          idempotency_key: `idem_${draftId}_v${versionId}`,
+          local_draft_id: draftId,
+          created_at: new Date().toISOString(),
+          retry_count: 0
+        });
+
+        onDraftSaved?.();
+        setInfoMsg('Borrador guardado localmente y encolado en Outbox para sincronización automática.');
         return;
       }
 
-      // Online save draft
-      const { data } = await api.request<Campaign>('/campaigns', {
-        method: 'POST',
-        body: draftData
-      });
-      onCampaignCreated(data);
+      // Online save draft (create or optimistic update)
+      let savedCampaign: Campaign;
+      if (serverCampaignId) {
+        const { data } = await api.request<Campaign>(`/campaigns/${serverCampaignId}`, {
+          method: 'PUT',
+          body: { ...draftData, version_id: versionId }
+        });
+        savedCampaign = data;
+      } else {
+        const { data } = await api.request<Campaign>('/campaigns', {
+          method: 'POST',
+          body: draftData
+        });
+        savedCampaign = data;
+      }
+
+      setServerCampaignId(savedCampaign.id);
+      setVersionId(savedCampaign.version_id);
+      if (localDraftId) {
+        await indexDB.deleteLocalDraft(localDraftId);
+        onDraftSaved?.();
+      }
+      onCampaignCreated(savedCampaign);
     } catch (e: any) {
       setErrorMsg(e.message || 'Error al guardar el borrador');
     }
@@ -172,6 +246,13 @@ export const CampaignWizard: React.FC<CampaignWizardProps> = ({ onCampaignCreate
         <div role="alert" className="mb-6 p-4 rounded-xl bg-rose-950/80 border border-rose-800/80 text-rose-300 text-xs flex items-center gap-2 animate-shake">
           <AlertCircle className="w-5 h-5 shrink-0" />
           <span>{errorMsg}</span>
+        </div>
+      )}
+
+      {infoMsg && (
+        <div className="mb-6 p-4 rounded-xl bg-emerald-950/80 border border-emerald-800/80 text-emerald-300 text-xs flex items-center gap-2">
+          <CheckCircle2 className="w-5 h-5 shrink-0" />
+          <span>{infoMsg}</span>
         </div>
       )}
 

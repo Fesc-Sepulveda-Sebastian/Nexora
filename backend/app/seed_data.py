@@ -96,21 +96,21 @@ def seed():
         )
         db.add(creator1_profile)
 
-        # Connect official OAuth mock for Creator 1
+        # Connect DEMO OAuth mock for Creator 1
         oauth_c1 = OAuthConsent(
             user_id=creator1.id,
             platform="INSTAGRAM",
             account_id="ig_sofiacastro_food",
             account_username="@sofiacastro_food",
-            encrypted_token="enc_tok_sample_c1_2026",
+            encrypted_token="demo_sim_tok_sample_c1_2026",
             scopes="user_profile,user_media,user_insights",
             is_active=True,
             expires_at=datetime.utcnow() + timedelta(days=90)
         )
         db.add(oauth_c1)
 
-        # Save connected metric snapshot in Mongo / fallback
-        snap1 = metrics_service.create_mock_connected_snapshot(
+        # Save DEMO/SIMULADO metric snapshot in Mongo / fallback
+        snap1 = metrics_service.create_demo_snapshot(
             cuenta_id="ig_sofiacastro_food",
             plataforma="INSTAGRAM",
             followers=8650,

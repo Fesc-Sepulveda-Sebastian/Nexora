@@ -37,6 +37,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [token]);
 
   const login = async (email: string, password: string) => {
+    // RNF-21 / H13: Purge any previous user's local IndexedDB & SW cache before switching account
+    await indexDB.purgeAllLocalData();
+    await purgeServiceWorkerCache();
+
     const { data } = await api.request<any>('/auth/login', {
       method: 'POST',
       body: { email, password }
@@ -60,7 +64,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = async () => {
-    // RNF-21: Purge all local cache, IndexedDB, and ServiceWorker caches
+    // RNF-21 / H13: Purge all local cache, IndexedDB, and ServiceWorker caches
     setUser(null);
     setRole(null);
     setToken(null);
@@ -68,7 +72,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     api.setToken(null);
 
     await indexDB.purgeAllLocalData();
-    purgeServiceWorkerCache();
+    await purgeServiceWorkerCache();
     console.log('[Auth] User logged out and local caches purged (RNF-21).');
   };
 

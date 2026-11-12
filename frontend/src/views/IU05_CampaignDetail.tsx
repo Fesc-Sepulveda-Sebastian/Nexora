@@ -198,7 +198,7 @@ export const IU05_CampaignDetail: React.FC<IU05CampaignDetailProps> = ({
           <div className="p-3 rounded-xl bg-slate-950 border border-slate-800/80 text-[11px] text-slate-400 flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>
-              Se adjuntará automáticamente tu Media Kit con métricas verificadas de API oficial (RN-03).
+              Se adjuntará automáticamente la instantánea de tu Media Kit actual con su trazabilidad de origen (RN-03).
             </span>
           </div>
 

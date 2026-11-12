@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { MediaKitData } from '../types';
 import { api } from '../services/api';
 import { indexDB } from '../db/indexdb';
+import { useAuth } from '../context/AuthContext';
 import { useOfflineSync } from '../context/OfflineSyncContext';
 import { KPICard } from '../components/mediakit/KPICard';
-import { Star, MapPin, Globe, ShieldCheck, Share2, Award, ExternalLink, MessageCircle } from 'lucide-react';
+import { Star, MapPin, Globe, ShieldCheck, Award, ExternalLink, MessageCircle, AlertCircle } from 'lucide-react';
 
 interface IU03MediaKitProps {
   creatorId?: string;
@@ -15,95 +16,67 @@ export const IU03_MediaKit: React.FC<IU03MediaKitProps> = ({
   creatorId,
   onContactOrInvite
 }) => {
+  const { user } = useAuth();
   const { isOnline } = useOfflineSync();
   const [mediaKit, setMediaKit] = useState<MediaKitData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     loadMediaKit();
-  }, [creatorId, isOnline]);
+  }, [creatorId, isOnline, user?.id]);
 
   const loadMediaKit = async () => {
     setLoading(true);
+    setErrorMsg(null);
     try {
-      // Determine creator ID (if not provided, fetch current user or demo creator)
       let targetId = creatorId;
       if (!targetId) {
-        try {
+        if (user?.id) {
+          targetId = user.id;
+        } else {
           const { data: me } = await api.request<any>('/users/me');
           targetId = me.id;
-        } catch (_) {
-          targetId = 'sofia_cucuta';
         }
       }
 
-      if (!isOnline && targetId) {
-        // Read from IndexedDB offline store (RF-20, RNF-02)
-        const cached = await indexDB.getMediaKit(targetId);
-        if (cached) {
-          setMediaKit(cached);
-          setLoading(false);
-          return;
+      if (!targetId) {
+        setErrorMsg('No se especificó un creador para visualizar el Media Kit.');
+        return;
+      }
+
+      // H13: Only cache and read offline Media Kit for the authenticated creator's own profile (privacy protection)
+      const isOwnMediaKit = Boolean(user?.id && targetId === user.id);
+
+      if (!isOnline) {
+        if (isOwnMediaKit) {
+          const cached = await indexDB.getMediaKit(targetId);
+          if (cached) {
+            setMediaKit(cached);
+            return;
+          }
         }
+        setErrorMsg('Sin conexión a internet. Por privacidad, solo el Media Kit propio se almacena en caché local.');
+        return;
       }
 
       // Fetch live dynamic media kit
       const { data } = await api.request<MediaKitData>(`/users/${targetId}/media-kit`);
       setMediaKit(data);
 
-      // Cache locally into IndexedDB for offline read
-      if (targetId) {
+      // Cache locally into IndexedDB strictly for own Media Kit
+      if (isOwnMediaKit) {
         await indexDB.saveMediaKit(data);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('Error fetching media kit:', e);
-      // Fallback demo data
-      setMediaKit({
-        creator_id: creatorId || 'sofia_cucuta',
-        display_name: 'Sofía Castro | Foodie Cúcuta',
-        bio: 'Narrando historias a través de sabores locales. Nano-influenciadora apasionada por la gastronomía nortesantandereana.',
-        location_declared: 'Cúcuta, Colombia',
-        niche: 'Gastronomía',
-        languages: 'Español, Inglés',
-        avatar_url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
-        version: 3,
-        verified_reviews_count: 12,
-        average_rating: 5.0,
-        portfolio_samples: [
-          { title: 'Degustación Pastel de Garbanzo Gourmet', format: 'Reel', views: 14200, url: 'https://instagram.com' },
-          { title: 'Tour Callejero de Postres en Cúcuta', format: 'TikTok', views: 28500, url: 'https://tiktok.com' }
-        ],
-        connected_metrics: [
-          {
-            plataforma: 'INSTAGRAM',
-            cuenta_id: 'ig_sofiacastro_food',
-            periodo: 'Últimos 30 días',
-            fecha_captura_utc: new Date().toISOString(),
-            estado: 'CONECTADO_API',
-            esquema_version: '1.0.0',
-            fuente_origen: 'API_OFICIAL_INSTAGRAM',
-            followers_count: 8650,
-            engagement: {
-              interactions: 1320,
-              reach_or_impressions: 19300,
-              formula_string: '((likes + comments + shares + saves) / reach) * 100',
-              calculated_percentage: 6.84
-            },
-            avg_impressions: 6400,
-            avg_video_views: 12800,
-            top_locations: [{ city: 'Cúcuta', pct: 65.0 }, { city: 'Bucaramanga', pct: 18.0 }],
-            authenticity_notice: 'Dato conectado verificado por API oficial. Nexora no certifica audiencia 100% auténtica (RN-03).'
-          }
-        ],
-        declared_metrics: [],
-        generated_at_utc: new Date().toISOString()
-      });
+      setErrorMsg(e?.message || 'No fue posible cargar el Media Kit desde el servidor.');
     } finally {
       setLoading(false);
     }
   };
 
-  if (loading || !mediaKit) {
+  if (loading) {
     return (
       <div className="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8 animate-pulse">
         <div className="h-48 bg-slate-900 rounded-3xl mb-6"></div>
@@ -116,7 +89,23 @@ export const IU03_MediaKit: React.FC<IU03MediaKitProps> = ({
     );
   }
 
+  if (errorMsg || !mediaKit) {
+    return (
+      <div className="max-w-3xl mx-auto p-6 mt-8 bg-slate-900 border border-slate-800 rounded-3xl text-center">
+        <AlertCircle className="w-10 h-10 text-amber-400 mx-auto mb-3" />
+        <p className="text-sm font-bold text-white">{errorMsg || 'Media Kit no disponible.'}</p>
+      </div>
+    );
+  }
+
   const primaryMetric = mediaKit.connected_metrics[0];
+  const isOfficialApi = Boolean(
+    primaryMetric &&
+    primaryMetric.estado === 'CONECTADO_API' &&
+    !primaryMetric.fuente_origen.toUpperCase().includes('DEMO') &&
+    !primaryMetric.fuente_origen.toUpperCase().includes('SIMULADO')
+  );
+  const metricSourceType = isOfficialApi ? 'API_CONECTADA' : 'DEMO_SIMULADO';
 
   return (
     <div className="max-w-6xl mx-auto p-4 sm:px-6 lg:px-8 py-6 pb-28 lg:pb-12 text-slate-100">
@@ -168,25 +157,29 @@ export const IU03_MediaKit: React.FC<IU03MediaKitProps> = ({
       <div className="mb-6">
         <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-2">
           <ShieldCheck className="w-4 h-4 text-emerald-400" />
-          <span>Métricas Conectadas & Verificadas (RN-03 Trazabilidad)</span>
+          <span>
+            {isOfficialApi
+              ? 'Métricas Conectadas & Verificadas (RN-03 Trazabilidad)'
+              : 'Métricas en Modo DEMO / Simulado & Declaradas (RN-03 Trazabilidad)'}
+          </span>
         </h2>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {primaryMetric ? (
             <>
               <KPICard
-                label="Seguidores Oficiales"
+                label={isOfficialApi ? 'Seguidores Oficiales' : 'Seguidores (Demo)'}
                 value={primaryMetric.followers_count.toLocaleString()}
-                subtitle="Instagram API"
-                sourceType="API_CONECTADA"
+                subtitle={isOfficialApi ? `${primaryMetric.plataforma} API` : `${primaryMetric.plataforma} (Simulado)`}
+                sourceType={metricSourceType}
                 captureDateUtc={primaryMetric.fecha_captura_utc}
                 period={primaryMetric.periodo}
               />
               <KPICard
                 label="Tasa de Engagement"
                 value={`${primaryMetric.engagement.calculated_percentage}%`}
-                subtitle="High Affinity"
-                sourceType="API_CONECTADA"
+                subtitle={isOfficialApi ? 'High Affinity' : 'Estimación Demo'}
+                sourceType={metricSourceType}
                 captureDateUtc={primaryMetric.fecha_captura_utc}
                 period={primaryMetric.periodo}
                 formulaDetails={{
@@ -199,7 +192,7 @@ export const IU03_MediaKit: React.FC<IU03MediaKitProps> = ({
                 label="Impresiones Promedio"
                 value={primaryMetric.avg_impressions.toLocaleString()}
                 subtitle="Por publicación"
-                sourceType="API_CONECTADA"
+                sourceType={metricSourceType}
                 captureDateUtc={primaryMetric.fecha_captura_utc}
                 period={primaryMetric.periodo}
               />
@@ -207,7 +200,7 @@ export const IU03_MediaKit: React.FC<IU03MediaKitProps> = ({
                 label="Reproducciones Video"
                 value={(primaryMetric.avg_video_views || 0).toLocaleString()}
                 subtitle="Reels & Stories"
-                sourceType="API_CONECTADA"
+                sourceType={metricSourceType}
                 captureDateUtc={primaryMetric.fecha_captura_utc}
                 period={primaryMetric.periodo}
               />
@@ -228,7 +221,7 @@ export const IU03_MediaKit: React.FC<IU03MediaKitProps> = ({
           <ShieldCheck className="w-4 h-4 text-brand-400 shrink-0" />
           <span>
             {primaryMetric?.authenticity_notice ||
-              'Dato conectado verificado por API oficial. Nexora no certifica audiencia 100% auténtica según RN-03.'}
+              'Dato declarado manualmente o en modo DEMO. Nexora no certifica audiencia 100% auténtica según RN-03.'}
           </span>
         </div>
       </div>

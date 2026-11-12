@@ -1,6 +1,6 @@
 from typing import Generic, TypeVar, List, Optional, Any
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 T = TypeVar("T")
 
@@ -35,5 +35,4 @@ class AuditLogOut(BaseModel):
     resultado: str
     metadata_json: Optional[str]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

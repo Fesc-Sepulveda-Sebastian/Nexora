@@ -24,11 +24,15 @@ export interface OfflineCampaign {
 
 export interface OfflineDraft {
   local_id: string;
+  server_id?: string;
   title: string;
   objective: string;
   niche: string;
   budget: number;
   compensation_type: string;
+  compensation_notes?: string;
+  start_date?: string;
+  end_date?: string;
   deliverables: any[];
   selection_criteria: any;
   version_id: number;
@@ -39,9 +43,11 @@ export interface OfflineDraft {
 export interface OutboxAction {
   id: string;
   action_type: 'SAVE_DRAFT' | 'UPDATE_PROFILE' | 'SYNC_CAMPAIGN';
+  method: 'POST' | 'PUT' | 'PATCH';
   endpoint: string;
   payload: any;
   idempotency_key: string;
+  local_draft_id?: string;
   created_at: string;
   retry_count: number;
 }
@@ -58,29 +64,24 @@ class IndexedDBController {
       request.onupgradeneeded = (event: IDBVersionChangeEvent) => {
         const db = (event.target as IDBOpenDBRequest).result;
 
-        // 1. Media Kit Store
         if (!db.objectStoreNames.contains('mediakit')) {
           db.createObjectStore('mediakit', { keyPath: 'creator_id' });
         }
 
-        // 2. Recent Campaigns Store (max 50)
         if (!db.objectStoreNames.contains('campaigns')) {
           const campStore = db.createObjectStore('campaigns', { keyPath: 'id' });
           campStore.createIndex('cached_at', 'cached_at', { unique: false });
         }
 
-        // 3. Local Drafts Store (max 5)
         if (!db.objectStoreNames.contains('drafts')) {
           db.createObjectStore('drafts', { keyPath: 'local_id' });
         }
 
-        // 4. Outbox Sync Queue Store
         if (!db.objectStoreNames.contains('outbox')) {
           const outboxStore = db.createObjectStore('outbox', { keyPath: 'id' });
           outboxStore.createIndex('created_at', 'created_at', { unique: false });
         }
 
-        // 5. Non-sensitive Preferences Store
         if (!db.objectStoreNames.contains('preferences')) {
           db.createObjectStore('preferences', { keyPath: 'key' });
         }
@@ -96,28 +97,33 @@ class IndexedDBController {
   // --- CAMPAIGNS (Max 50) ---
   async saveRecentCampaign(campaign: OfflineCampaign): Promise<void> {
     const db = await this.getDB();
-    const tx = db.transaction('campaigns', 'readwrite');
-    const store = tx.objectStore('campaigns');
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('campaigns', 'readwrite');
+      const store = tx.objectStore('campaigns');
 
-    store.put({ ...campaign, cached_at: new Date().toISOString() });
+      store.put({ ...campaign, cached_at: new Date().toISOString() });
 
-    // Prune to maximum 50 campaigns
-    const countReq = store.count();
-    countReq.onsuccess = () => {
-      if (countReq.result > 50) {
-        const index = store.index('cached_at');
-        const cursorReq = index.openCursor();
-        let deleted = 0;
-        cursorReq.onsuccess = (e) => {
-          const cursor = (e.target as IDBRequest).result;
-          if (cursor && deleted < countReq.result - 50) {
-            cursor.delete();
-            deleted++;
-            cursor.continue();
-          }
-        };
-      }
-    };
+      const countReq = store.count();
+      countReq.onsuccess = () => {
+        if (countReq.result > 50) {
+          const index = store.index('cached_at');
+          const cursorReq = index.openCursor();
+          let deleted = 0;
+          const toDelete = countReq.result - 50;
+          cursorReq.onsuccess = (e) => {
+            const cursor = (e.target as IDBRequest).result;
+            if (cursor && deleted < toDelete) {
+              cursor.delete();
+              deleted++;
+              cursor.continue();
+            }
+          };
+        }
+      };
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
   }
 
   async getRecentCampaigns(): Promise<OfflineCampaign[]> {
@@ -134,15 +140,62 @@ class IndexedDBController {
   // --- DRAFTS (Max 5) ---
   async saveLocalDraft(draft: OfflineDraft): Promise<void> {
     const db = await this.getDB();
-    const tx = db.transaction('drafts', 'readwrite');
-    const store = tx.objectStore('drafts');
+    // Single synchronous read+write inside one transaction (no external await that closes tx)
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('drafts', 'readwrite');
+      const store = tx.objectStore('drafts');
+      const getAllReq = store.getAll();
 
-    const drafts = await this.getLocalDrafts();
-    if (drafts.length >= 5 && !drafts.some(d => d.local_id === draft.local_id)) {
-      throw new Error('Límite de 5 borradores locales alcanzado (RNF-02). Elimine o sincronice un borrador existente.');
-    }
+      getAllReq.onsuccess = () => {
+        const existingDrafts: OfflineDraft[] = getAllReq.result || [];
+        const isUpdate = existingDrafts.some((d) => d.local_id === draft.local_id);
+        if (existingDrafts.length >= 5 && !isUpdate) {
+          tx.abort();
+          reject(
+            new Error(
+              'Límite de 5 borradores locales alcanzado (RNF-02). Elimine o sincronice un borrador existente.'
+            )
+          );
+          return;
+        }
+        store.put({ ...draft, last_modified: new Date().toISOString() });
+      };
 
-    store.put({ ...draft, last_modified: new Date().toISOString() });
+      getAllReq.onerror = () => {
+        reject(getAllReq.error);
+      };
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async updateLocalDraftStatus(
+    local_id: string,
+    sync_status: OfflineDraft['sync_status'],
+    patch: Partial<OfflineDraft> = {}
+  ): Promise<void> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('drafts', 'readwrite');
+      const store = tx.objectStore('drafts');
+      const getReq = store.get(local_id);
+
+      getReq.onsuccess = () => {
+        const existing = getReq.result as OfflineDraft | undefined;
+        if (existing) {
+          store.put({
+            ...existing,
+            ...patch,
+            sync_status,
+            last_modified: new Date().toISOString(),
+          });
+        }
+      };
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
   }
 
   async getLocalDrafts(): Promise<OfflineDraft[]> {
@@ -158,15 +211,23 @@ class IndexedDBController {
 
   async deleteLocalDraft(local_id: string): Promise<void> {
     const db = await this.getDB();
-    const tx = db.transaction('drafts', 'readwrite');
-    tx.objectStore('drafts').delete(local_id);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('drafts', 'readwrite');
+      tx.objectStore('drafts').delete(local_id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
   }
 
   // --- MEDIA KIT ---
   async saveMediaKit(mediaKit: any): Promise<void> {
     const db = await this.getDB();
-    const tx = db.transaction('mediakit', 'readwrite');
-    tx.objectStore('mediakit').put(mediaKit);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('mediakit', 'readwrite');
+      tx.objectStore('mediakit').put(mediaKit);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
   }
 
   async getMediaKit(creator_id: string): Promise<any | null> {
@@ -182,8 +243,12 @@ class IndexedDBController {
   // --- OUTBOX QUEUE ---
   async addToOutbox(action: OutboxAction): Promise<void> {
     const db = await this.getDB();
-    const tx = db.transaction('outbox', 'readwrite');
-    tx.objectStore('outbox').put(action);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('outbox', 'readwrite');
+      tx.objectStore('outbox').put(action);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
   }
 
   async getOutboxActions(): Promise<OutboxAction[]> {
@@ -198,17 +263,27 @@ class IndexedDBController {
 
   async removeOutboxAction(id: string): Promise<void> {
     const db = await this.getDB();
-    const tx = db.transaction('outbox', 'readwrite');
-    tx.objectStore('outbox').delete(id);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('outbox', 'readwrite');
+      tx.objectStore('outbox').delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
   }
 
   // --- PURGE ON LOGOUT (RNF-21) ---
   async purgeAllLocalData(): Promise<void> {
     const db = await this.getDB();
     const stores = ['mediakit', 'campaigns', 'drafts', 'outbox', 'preferences'];
-    const tx = db.transaction(stores, 'readwrite');
-    stores.forEach((s) => tx.objectStore(s).clear());
-    console.log('[IndexedDB] All local storage purged for privacy and security (RNF-21).');
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(stores, 'readwrite');
+      stores.forEach((s) => tx.objectStore(s).clear());
+      tx.oncomplete = () => {
+        console.log('[IndexedDB] All local storage purged for privacy and security (RNF-21).');
+        resolve();
+      };
+      tx.onerror = () => reject(tx.error);
+    });
   }
 }
 

@@ -1,7 +1,30 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080/api/v1';
+const API_BASE_URL =
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.DEV ? 'http://localhost:8080/api/v1' : '/api/v1');
 
 class ApiClient {
   private token: string | null = null;
+
+  getApiOrigin(): string {
+    if (API_BASE_URL.startsWith('http://') || API_BASE_URL.startsWith('https://')) {
+      return API_BASE_URL.replace(/\/api\/v1\/?$/, '');
+    }
+    if (typeof window !== 'undefined' && window.location?.origin) {
+      return window.location.origin;
+    }
+    return '';
+  }
+
+  getWsBaseUrl(): string {
+    const origin = this.getApiOrigin();
+    if (origin.startsWith('https://')) {
+      return origin.replace(/^https:\/\//, 'wss://');
+    }
+    if (origin.startsWith('http://')) {
+      return origin.replace(/^http:\/\//, 'ws://');
+    }
+    return origin;
+  }
 
   setToken(token: string | null) {
     this.token = token;

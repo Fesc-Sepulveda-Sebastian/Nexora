@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from enum import Enum
-from sqlalchemy import Column, String, DateTime, ForeignKey, Text, Integer, Float
+from sqlalchemy import Column, String, DateTime, ForeignKey, Text, Integer, Float, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -19,6 +19,10 @@ class DeliverableStatus(str, Enum):
 
 class Application(Base):
     __tablename__ = "applications"
+    __table_args__ = (
+        UniqueConstraint("campaign_id", "creator_id", name="uq_application_campaign_creator"),
+        UniqueConstraint("creator_id", "idempotency_key", name="uq_application_creator_idempotency"),
+    )
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     campaign_id = Column(String(36), ForeignKey("campaigns.id"), nullable=False)
@@ -30,7 +34,7 @@ class Application(Base):
     media_kit_data = Column(Text, nullable=False)  # JSON snapshot: followers, engagement, niche, samples
     
     status = Column(String(50), default=ApplicationStatus.RECIBIDA, nullable=False)
-    idempotency_key = Column(String(100), unique=True, nullable=True)  # RN-02, RNF-10
+    idempotency_key = Column(String(100), nullable=True)  # RN-02, RNF-10 (scoped per creator)
     
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

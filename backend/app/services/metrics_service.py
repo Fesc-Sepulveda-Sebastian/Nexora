@@ -61,10 +61,10 @@ class MetricsService:
         return results
 
     @staticmethod
-    def create_mock_connected_snapshot(cuenta_id: str, plataforma: str, followers: int, engagement_pct: float, city: str = "Cúcuta") -> MetricSnapshot:
+    def create_demo_snapshot(cuenta_id: str, plataforma: str, followers: int, engagement_pct: float, city: str = "Cúcuta") -> MetricSnapshot:
         """
-        Helper to simulate an official API metric sync (RF-04, RN-03).
-        Calculates exact engagement formula and stores transparent metadata.
+        Generates a DEMO/SIMULATED metric snapshot (RF-04, RN-03).
+        Explicitly labeled as DEMO / SIMULADO until real provider OAuth token exchange is integrated.
         """
         reach = int(followers * 2.2)
         interactions = int(reach * (engagement_pct / 100.0))
@@ -81,9 +81,9 @@ class MetricsService:
             cuenta_id=cuenta_id,
             periodo="LAST_30_DAYS",
             fecha_captura_utc=datetime.utcnow(),
-            estado="CONECTADO_API",
+            estado="DEMO",
             esquema_version="1.0.0",
-            fuente_origen=f"API_OFICIAL_{plataforma.upper()}",
+            fuente_origen=f"DEMO_SIMULADO_{plataforma.upper()}",
             followers_count=followers,
             engagement=formula,
             avg_impressions=int(reach * 0.75),
@@ -93,8 +93,22 @@ class MetricsService:
                 {"city": "Bucaramanga", "pct": 18.0},
                 {"city": "Bogotá", "pct": 12.0}
             ],
-            authenticity_notice="Dato conectado verificado por API oficial. Nexora no certifica audiencia 100% auténtica (RN-03)."
+            authenticity_notice="Dato SIMULADO (Modo Demo). No corresponde a una conexión real con API oficial del proveedor (RN-03)."
         )
         return snapshot
+
+    @staticmethod
+    def create_mock_connected_snapshot(cuenta_id: str, plataforma: str, followers: int, engagement_pct: float, city: str = "Cúcuta") -> MetricSnapshot:
+        """
+        Backwards-compatible alias that delegates strictly to create_demo_snapshot
+        so simulated metrics are never labeled as API_OFICIAL.
+        """
+        return MetricsService.create_demo_snapshot(
+            cuenta_id=cuenta_id,
+            plataforma=plataforma,
+            followers=followers,
+            engagement_pct=engagement_pct,
+            city=city,
+        )
 
 metrics_service = MetricsService()

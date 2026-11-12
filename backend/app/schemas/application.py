@@ -1,6 +1,6 @@
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from app.models.application import ApplicationStatus, DeliverableStatus
 
 class ApplicationCreate(BaseModel):
@@ -14,10 +14,15 @@ class ApplicationStatusUpdate(BaseModel):
 
 class DeliverableEvidenceCreate(BaseModel):
     deliverable_name: str = Field(..., min_length=2)
-    file_url: str = Field(..., description="URL firmada de S3/MinIO del archivo subido")
+    file_key: Optional[str] = Field(None, description="Clave de objeto en S3/MinIO o almacenamiento")
+    file_url: str = Field(..., description="URL firmada o pública del archivo subido")
     file_hash_sha256: str = Field(..., min_length=64, max_length=64, description="Hash SHA-256 para verificación de integridad")
-    file_size_mb: float = Field(..., ge=0.01, le=10.0, description="Tamaño de archivo permitido entre 0.01 MB y 10 MB")
+    file_size_mb: float = Field(..., gt=0.0, le=10.0, description="Tamaño de archivo permitido hasta 10 MB")
     external_live_url: Optional[str] = Field(None, description="Enlace a la publicación pública en red social")
+
+class DeliverableEvidenceReview(BaseModel):
+    status: DeliverableStatus
+    review_notes: Optional[str] = None
 
 class DeliverableEvidenceOut(BaseModel):
     id: str
@@ -32,8 +37,7 @@ class DeliverableEvidenceOut(BaseModel):
     submitted_at: datetime
     reviewed_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class ApplicationOut(BaseModel):
     id: str
@@ -48,5 +52,4 @@ class ApplicationOut(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 class EngagementFormula(BaseModel):
     interactions: int = Field(description="Interacciones totales (likes, comments, shares, saves)")
@@ -14,11 +14,11 @@ class MetricSnapshot(BaseModel):
     cuenta_id: str = Field(..., description="Identificador único de la cuenta en la plataforma social")
     periodo: str = Field(..., description="Ventana temporal analizada, ej. 'LAST_30_DAYS', '2026-M09'")
     fecha_captura_utc: datetime = Field(default_factory=datetime.utcnow, description="Timestamp UTC inmutable de captura")
-    estado: str = Field(..., description="'CONECTADO_API', 'DECLARADO', 'NO_DISPONIBLE'")
+    estado: str = Field(..., description="'DEMO', 'SIMULADO', 'CONECTADO_API', 'DECLARADO', 'NO_DISPONIBLE'")
     
     # Traceability & Schema Versioning (RN-03)
     esquema_version: str = Field(default="1.0.0", description="Versión del esquema de métricas")
-    fuente_origen: str = Field(..., description="API_OFICIAL_INSTAGRAM, API_OFICIAL_YOUTUBE, API_OFICIAL_TIKTOK, DECLARADO_MANUAL")
+    fuente_origen: str = Field(..., description="DEMO_SIMULADO_INSTAGRAM, API_OFICIAL_INSTAGRAM, DECLARADO_MANUAL")
     
     # Semi-structured metrics data
     followers_count: int = Field(default=0)
@@ -33,8 +33,8 @@ class MetricSnapshot(BaseModel):
         description="Aviso legal y técnico obligatorio de veracidad"
     )
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "plataforma": "INSTAGRAM",
                 "cuenta_id": "creator_cucuta_food",
@@ -56,3 +56,4 @@ class MetricSnapshot(BaseModel):
                 "authenticity_notice": "Dato conectado verificado por API oficial. Nexora no certifica audiencia 100% auténtica (RN-03)."
             }
         }
+    )

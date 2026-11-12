@@ -2,7 +2,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models.campaign import Campaign
+from app.models.campaign import Campaign, CampaignStatus
 from app.models.user import User, UserRole
 from app.schemas.recommendation import RecommendationResult
 from app.schemas.common import APIResponse
@@ -24,6 +24,13 @@ def recommend_creators(
     campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaña no encontrada")
+
+    if (
+        campaign.status in (CampaignStatus.BORRADOR.value, CampaignStatus.CANCELADA.value)
+        and campaign.brand_id != current_user.id
+        and current_user.role != UserRole.ADMINISTRADOR.value
+    ):
+        raise HTTPException(status_code=403, detail="No autorizado para acceder a esta campaña")
 
     creators = db.query(User).filter(User.role == UserRole.CREADOR.value, User.is_active == True).all()
 

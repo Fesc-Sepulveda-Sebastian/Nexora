@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.message import Message, Notification
 from app.models.collaboration import CollaborationAgreement
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.schemas.message import MessageCreate, MessageOut, NotificationOut
 from app.schemas.common import APIResponse
 from app.core.websocket_manager import ws_manager
@@ -28,6 +28,9 @@ async def send_message(
 
     if current_user.id != collab.brand_id and current_user.id != collab.creator_id:
         raise HTTPException(status_code=403, detail="No eres participante de esta colaboración")
+
+    if msg_in.recipient_id not in (collab.brand_id, collab.creator_id):
+        raise HTTPException(status_code=400, detail="El destinatario no pertenece a esta colaboración")
 
     msg = Message(
         collaboration_id=msg_in.collaboration_id,
@@ -77,6 +80,17 @@ def get_collaboration_messages(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    collab = db.query(CollaborationAgreement).filter(CollaborationAgreement.id == collaboration_id).first()
+    if not collab:
+        raise HTTPException(status_code=404, detail="Colaboración no encontrada")
+
+    if (
+        current_user.id != collab.brand_id
+        and current_user.id != collab.creator_id
+        and current_user.role != UserRole.ADMINISTRADOR.value
+    ):
+        raise HTTPException(status_code=403, detail="No autorizado para ver mensajes de esta colaboración")
+
     messages = db.query(Message).filter(Message.collaboration_id == collaboration_id).order_by(Message.created_at.asc()).all()
     return APIResponse(
         success=True,

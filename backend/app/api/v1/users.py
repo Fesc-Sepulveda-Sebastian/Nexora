@@ -1,4 +1,5 @@
 import json
+import secrets
 from datetime import datetime
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,7 +10,9 @@ from app.schemas.user import UserOut, ProfileUpdate, ProfileOut, MediaKitOut, Pr
 from app.schemas.common import APIResponse
 from app.schemas.metric_snapshot import MetricSnapshot
 from app.services.metrics_service import metrics_service
-from app.api.deps import get_current_user
+from app.core.security import get_password_hash
+from app.core.audit_middleware import record_audit_log
+from app.api.deps import get_current_user, get_correlation_id
 
 router = APIRouter(prefix="/users", tags=["Usuarios y Media Kit"])
 
@@ -54,7 +57,7 @@ def get_creator_media_kit(creator_id: str, db: Session = Depends(get_db)):
     Distinguishes official connected API metrics from manually declared data (RN-03).
     """
     creator = db.query(User).filter(User.id == creator_id).first()
-    if not creator or not creator.profile:
+    if not creator or not creator.profile or not creator.is_active or creator.privacy_status == "deleted":
         raise HTTPException(status_code=404, detail="Creador o perfil no encontrado")
 
     profile = creator.profile
@@ -119,25 +122,70 @@ def get_creator_media_kit(creator_id: str, db: Session = Depends(get_db)):
 def request_account_deletion(
     req_in: PrivacyRequestCreate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    correlation_id: str = Depends(get_correlation_id)
 ):
     """
-    Privacy and account deletion request (RNF-12, RNF-17).
-    Marks privacy status and schedules minimization of data.
+    Privacy and account deletion/anonymization request (RNF-12, RNF-17).
+    Executes immediate PII anonymization, revokes OAuth consents, deactivates account,
+    and records a completed PrivacyRequest atomically.
     """
-    req = PrivacyRequest(
-        user_id=current_user.id,
-        notes=req_in.notes,
-        status="pending",
-        created_at=datetime.utcnow()
-    )
-    current_user.privacy_status = "deletion_requested"
-    db.add(req)
-    db.commit()
-    db.refresh(req)
+    now = datetime.utcnow()
+    try:
+        req = PrivacyRequest(
+            user_id=current_user.id,
+            notes=req_in.notes,
+            status="completed",
+            created_at=now,
+            processed_at=now
+        )
+        db.add(req)
+        db.flush()
+
+        # Anonymize user PII and deactivate account
+        current_user.email = f"deleted_{current_user.id}@anonymized.nexora.local"
+        current_user.hashed_password = get_password_hash(secrets.token_urlsafe(32))
+        current_user.is_active = False
+        current_user.privacy_status = "deleted"
+        current_user.updated_at = now
+
+        if current_user.profile:
+            current_user.profile.display_name = f"Usuario Anonimizado {current_user.id[:8]}"
+            current_user.profile.bio = None
+            current_user.profile.location_declared = None
+            current_user.profile.avatar_url = None
+            current_user.profile.portfolio_samples = None
+            current_user.profile.updated_at = now
+
+        # Revoke all OAuth consents
+        consents = db.query(OAuthConsent).filter(OAuthConsent.user_id == current_user.id).all()
+        for c in consents:
+            c.is_active = False
+            c.encrypted_token = "REVOKED"
+
+        record_audit_log(
+            db=db,
+            correlation_id=correlation_id,
+            actor_id=current_user.id,
+            rol=current_user.role,
+            entidad="privacy_request",
+            entidad_id=req.id or current_user.id,
+            operacion="PRIVACY_DELETE_ANONYMIZE",
+            estado_anterior="active",
+            estado_nuevo="deleted",
+            resultado="SUCCESS",
+            commit=False
+        )
+
+        db.commit()
+        db.refresh(req)
+    except Exception:
+        db.rollback()
+        raise
 
     return APIResponse(
         success=True,
-        message="Solicitud de eliminación de datos registrada. Su información será anonimizada según RNF-12.",
-        data=PrivacyRequestOut.model_validate(req)
+        message="Solicitud de privacidad procesada. Sus datos personales han sido anonimizados y la cuenta desactivada según RNF-12.",
+        data=PrivacyRequestOut.model_validate(req),
+        correlation_id=correlation_id
     )
